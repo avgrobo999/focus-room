@@ -385,8 +385,12 @@ addEventListener('pointerdown', resumeAudioOnce, true);
 addEventListener('keydown', resumeAudioOnce, true);
 
 /* ================= music ================= */
+// Lofi Girl live streams (verified Nov 2026 — stream IDs occasionally change; paste a new link if one goes offline)
 const MUSIC = [
-  { kind: 'youtube', id: 'jfKfPfyJRdk', title: 'Lofi hip hop radio', sub: 'YouTube · live' },
+  { kind: 'youtube', id: 'rFZHOHl-L8A', title: 'Lofi hip hop radio', sub: 'YouTube · live · beats to relax/study to' },
+  { kind: 'youtube', id: 'E2vONfzoyRI', title: 'Jazz lofi radio', sub: 'YouTube · live' },
+  { kind: 'youtube', id: 'N0snMcR6aaA', title: 'Relaxing piano radio', sub: 'YouTube · live' },
+  { kind: 'youtube', id: 'jXAEIWcGXwE', title: 'Classical music radio', sub: 'YouTube · live' },
   { kind: 'youtube', id: '4xDzrJKXOOY', title: 'Synthwave radio', sub: 'YouTube · live' },
   { kind: 'spotify', id: 'playlist/37i9dQZF1DWZeKCadgRdKQ', title: 'Deep Focus', sub: 'Spotify playlist' },
   { kind: 'spotify', id: 'playlist/37i9dQZF1DWWQRwui0ExPn', title: 'Lofi Beats', sub: 'Spotify playlist' },

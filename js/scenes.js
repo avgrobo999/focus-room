@@ -445,17 +445,25 @@ export const CANVAS_SCENES = [
   { id: 'city', name: 'Midnight city', kind: 'canvas', tone: 'dark' },
 ];
 
-// Photo themes served by Lorem Picsum (Unsplash photos, free to use)
+// Photo themes hot-linked from Unsplash (free to use under the Unsplash License)
 export const PHOTO_SCENES = [
-  { id: 'p1018', pid: 1018, name: 'Alpine valley' },
-  { id: 'p1015', pid: 1015, name: 'River canyon' },
-  { id: 'p1036', pid: 1036, name: 'Snowy peaks' },
-  { id: 'p1039', pid: 1039, name: 'Hidden falls' },
-  { id: 'p1043', pid: 1043, name: 'Quiet road' },
-  { id: 'p1044', pid: 1044, name: 'Misty woods' },
-  { id: 'p1050', pid: 1050, name: 'Lakeside' },
-  { id: 'p1019', pid: 1019, name: 'Coastline' },
-].map((p) => ({ ...p, kind: 'photo', url: `https://picsum.photos/id/${p.pid}/2400/1350`, thumb: `https://picsum.photos/id/${p.pid}/360/220` }));
+  ['1506905925346-21bda4d32df4', 'Above the clouds'],
+  ['1501785888041-af3ef285b470', 'Alpine lake'],
+  ['1470071459604-3b5ec3a7fe05', 'Misty valley'],
+  ['1441974231531-c6227db76b6e', 'Sunlit forest'],
+  ['1507525428034-b723cf961d3e', 'Beach sunset'],
+  ['1519681393784-d120267933ba', 'Starry peaks'],
+  ['1472214103451-9374bd1c798e', 'Sunset meadow'],
+  ['1433086966358-54859d0ed716', 'Waterfall bridge'],
+  ['1505142468610-359e7d316be0', 'Ocean waves'],
+  ['1500530855697-b586d89ba3ee', 'Desert road'],
+  ['1418065460487-3e41a6c84dc5', 'Foggy pines'],
+  ['1464822759023-fed622ff2c3b', 'Mountain lake'],
+].map(([pid, name]) => ({
+  id: `u${pid.slice(0, 13)}`, name, kind: 'photo',
+  url: `https://images.unsplash.com/photo-${pid}?auto=format&fit=crop&w=2400&q=80`,
+  thumb: `https://images.unsplash.com/photo-${pid}?auto=format&fit=crop&w=400&h=250&q=60`,
+}));
 
 export class SceneRenderer {
   constructor(canvas, imgEl) {

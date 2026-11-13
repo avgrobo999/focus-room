@@ -34,4 +34,4 @@ Keyboard shortcuts: `Space` start/pause · `R` reset · `N` skip · `1 2 3` mode
 
 ## Credits
 
-Icons from [Lucide](https://lucide.dev) (ISC). Fonts are Outfit and Instrument Serif (SIL OFL). Photo themes come from [Lorem Picsum](https://picsum.photos) (Unsplash photos). Inspired by the layout of focus dashboards like Flocus, but all code, scenes and sounds are original.
+Icons from [Lucide](https://lucide.dev) (ISC). Fonts are Outfit and Instrument Serif (SIL OFL). Photo themes are hot-linked from [Unsplash](https://unsplash.com) (Unsplash License). Music presets embed Lofi Girl's YouTube live streams and Spotify playlists. Inspired by the layout of focus dashboards like Flocus, but all code, scenes and sounds are original.
