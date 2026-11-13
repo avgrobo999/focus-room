@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>focusroom</title>
+  <meta name="description" content="A calm, aesthetic focus dashboard: Pomodoro timer, tasks, ambient sounds and animated scenes, with a private study room for you and one friend.">
+  <meta name="theme-color" content="#1c1433">
+  <meta property="og:title" content="focusroom — study together">
+  <meta property="og:description" content="Aesthetic focus timer with ambient sounds, scenes, tasks and a shared room for you and a friend.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="fonts/fonts.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="mode-home">
+  <div id="bg" aria-hidden="true">
+    <canvas id="scene-canvas"></canvas>
+    <div id="scene-img"></div>
+    <div id="bg-shade"></div>
+  </div>
+  <div id="floaters" aria-hidden="true"></div>
+
+  <header id="top">
+    <div class="brand"><span class="brand-mark"></span><span class="brand-name">focusroom</span></div>
+    <button id="friend-chip" class="glass chip" hidden></button>
+    <div id="top-right">
+      <blockquote id="quote" class="quote" title="Click for another quote">
+        <p id="quote-text"></p>
+        <cite id="quote-author"></cite>
+      </blockquote>
+      <button id="mini-timer" class="glass mini-timer" title="Open focus mode">
+        <span id="mini-phase">Focus</span><b id="mini-time">25:00</b>
+      </button>
+    </div>
+  </header>
+
+  <main id="stage">
+    <section id="home-view" class="view" aria-label="Home">
+      <p id="greeting" class="greeting"><span id="greet-word">Hello</span>, <input id="greet-name" autocomplete="off" spellcheck="false" maxlength="30" placeholder="your name" aria-label="Your name">.</p>
+      <h1 id="clock" class="clock">--:--</h1>
+      <div id="main-focus" class="main-focus">
+        <label id="mf-label" for="mf-input">What’s your main focus today?</label>
+        <input id="mf-input" autocomplete="off" maxlength="140" placeholder="">
+        <div id="mf-current" class="mf-current" hidden>
+          <button id="mf-check" class="check-btn" title="Mark done"></button>
+          <span id="mf-text"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="focus-view" class="view" aria-label="Focus timer">
+      <div id="phase-tabs" class="phase-tabs glass" role="tablist">
+        <button data-phase="focus" role="tab">Focus</button>
+        <button data-phase="short" role="tab">Short break</button>
+        <button data-phase="long" role="tab">Long break</button>
+      </div>
+      <div id="type-label" class="type-label" hidden></div>
+      <div id="timer" class="timer" role="timer" aria-live="off">25:00</div>
+      <div id="tally" class="tally" aria-label="Sessions this round"></div>
+      <div class="timer-controls">
+        <button id="t-reset" class="round glass" title="Reset (R)"></button>
+        <button id="t-toggle" class="primary" title="Start / pause (Space)">Start</button>
+        <button id="t-skip" class="round glass" title="Skip to next (N)"></button>
+      </div>
+      <button id="focus-task" class="focus-task glass" title="Open tasks">
+        <span class="ft-dot"></span><span id="focus-task-text">Pick a task to focus on</span>
+      </button>
+      <div id="sync-badge" class="sync-badge" hidden></div>
+    </section>
+  </main>
+
+  <footer id="bottom">
+    <nav id="dock" class="dock glass" aria-label="Tools">
+      <button data-panel="sounds" data-icon="audio-waveform" title="Ambient sounds (S)"></button>
+      <button data-panel="music" data-icon="music" title="Music (M)"></button>
+      <button data-panel="tasks" data-icon="list-todo" title="Tasks (T)"></button>
+      <button data-panel="stats" data-icon="chart-column" title="Focus stats"></button>
+      <button data-panel="themes" data-icon="image" title="Themes (B)"></button>
+      <button data-panel="room" data-icon="users" title="Study with a friend (G)" class="room-btn"><i id="room-dot" class="dot-ind" hidden></i></button>
+      <span class="sep"></span>
+      <button data-panel="settings" data-icon="settings" title="Settings"></button>
+      <button id="fullscreen-btn" data-icon="maximize" title="Full screen (F)"></button>
+    </nav>
+    <div id="mode-switch" class="mode-switch glass" role="tablist" aria-label="Mode">
+      <button data-mode="ambient" data-icon="flower-2" title="Ambient (1)"><span>Ambient</span></button>
+      <button data-mode="home" data-icon="house" title="Home (2)"><span>Home</span></button>
+      <button data-mode="focus" data-icon="target" title="Focus (3)"><span>Focus</span></button>
+    </div>
+  </footer>
+
+  <div id="panels">
+    <section class="panel glass" id="panel-sounds" aria-label="Sounds"></section>
+    <section class="panel glass" id="panel-music" aria-label="Music"></section>
+    <section class="panel glass" id="panel-tasks" aria-label="Tasks"></section>
+    <section class="panel glass" id="panel-stats" aria-label="Stats"></section>
+    <section class="panel glass wide" id="panel-themes" aria-label="Themes"></section>
+    <section class="panel glass" id="panel-room" aria-label="Study room"></section>
+    <section class="panel glass" id="panel-settings" aria-label="Settings"></section>
+  </div>
+
+  <div id="toasts" aria-live="polite"></div>
+
+  <script src="vendor/peerjs.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
