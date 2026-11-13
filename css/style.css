@@ -397,3 +397,8 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 /* the huge clock/timer glyphs overflow their line box — keep interactive rows above them */
 .greeting, .main-focus, .phase-tabs, .timer-controls, .focus-task, .tally, .type-label { position: relative; z-index: 1; }
 .clock, .timer { position: relative; z-index: 0; pointer-events: none; }
+
+/* medium widths: keep the friend chip clear of the quote */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .chip { left: 26px; transform: none; top: calc(max(20px, env(safe-area-inset-top)) + 34px); }
+}
