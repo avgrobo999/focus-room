@@ -402,3 +402,19 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 @media (min-width: 761px) and (max-width: 1180px) {
   .chip { left: 26px; transform: none; top: calc(max(20px, env(safe-area-inset-top)) + 34px); }
 }
+
+/* ---------- secure rooms ---------- */
+.sec-list { list-style: none; margin: 4px 0 14px; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: var(--muted); }
+.sec-list li { display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
+.sec-list li .ic { width: 16px; height: 16px; color: var(--ok); margin-top: 2px; }
+.sec-list b { color: var(--fg); font-weight: 600; }
+.e2e-line { display: flex; gap: 7px; align-items: flex-start; font-size: 12.5px; color: var(--muted); margin: 10px 2px 0; line-height: 1.4; }
+.e2e-line .ic { width: 14px; height: 14px; color: var(--ok); margin-top: 1px; flex: none; }
+.gsi-slot { display: flex; justify-content: center; min-height: 44px; margin-top: 8px; }
+.friend-card .name { display: flex; align-items: center; gap: 6px; }
+.friend-card .verified .ic { width: 16px; height: 16px; color: var(--ok); }
+.friend-card .email { font-size: 12.5px; color: var(--faint); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; }
+.avatar { overflow: hidden; }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+#lock-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }

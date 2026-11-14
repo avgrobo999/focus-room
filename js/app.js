@@ -1,11 +1,23 @@
 import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js';
 import { icon } from './icons.js';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, clientId, addSession, statsSummary } from './store.js';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js';
 import { quoteOfTheDay } from './quotes.js';
 import { Timer } from './timer.js';
 import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js';
 import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js';
-import { Room, newRoomCode, parseRoomCode, roomSupported } from './room.js';
+import { Room, newRoom, parseInvite, roomSupported } from './room.js';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js';
+import { sha256b64u } from './crypto.js';
+
+// Refuse to run inside someone else's frame (clickjacking)
+if (window.top !== window.self) {
+  document.body.innerHTML = '';
+  const a = document.createElement('a');
+  a.href = location.href; a.target = '_top'; a.textContent = 'Open focusroom';
+  a.style.cssText = 'color:#fff;font:600 18px sans-serif;position:fixed;inset:0;display:grid;place-items:center';
+  document.body.append(a);
+  throw new Error('focusroom refuses to run in a frame');
+}
 
 /* ================= state ================= */
 const S = loadSettings();
@@ -13,16 +25,14 @@ const persist = debounce(() => save('settings', S), 250);
 let tasks = load('tasks', []);
 const saveTasks = () => save('tasks', tasks);
 let customScenes = load('customScenes', []);
-const CID = clientId();
-const myColor = `hsl(${[...CID].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 85% 78%)`;
 
 const timer = new Timer(() => S);
 const scenes = new SceneRenderer($('#scene-canvas'), $('#scene-img'));
-const room = new Room({ clientId: CID, hello: () => ({ name: S.name || 'Friend', color: myColor }) });
+const room = new Room({ verifyPeer: () => Promise.reject(new Error('not ready')), getToken: () => null });
 
 const PHASE_NAMES = { focus: 'Focus', short: 'Short break', long: 'Long break', countdown: 'Countdown', stopwatch: 'Stopwatch' };
 const TALLY = { dot: '●', tomato: '🍅', star: '★', heart: '♥' };
-const firstName = () => (room.friend?.name || 'Your friend').split(' ')[0];
+const firstName = () => (room.friend?.givenName || room.friend?.name || 'Your friend').split(' ')[0];
 const currentTask = () => tasks.find((t) => !t.done);
 
 /* ================= small UI helpers ================= */
@@ -103,11 +113,10 @@ const nameInput = $('#greet-name');
 const fitName = () => { if (!CSS.supports('field-sizing', 'content')) nameInput.size = Math.max(2, (nameInput.value || nameInput.placeholder).length); };
 const nameEl = { set textContent(v) { if (nameInput !== document.activeElement) { nameInput.value = v; fitName(); } } };
 nameEl.textContent = S.name;
-const announceName = debounce(() => room.updateHello(), 600);
+const announceName = () => {}; // room names now come from the verified Google account
 nameInput.addEventListener('input', () => {
   S.name = nameInput.value.replace(/\s+/g, ' ').trim().slice(0, 30);
   fitName(); persist(); announceName();
-  for (const id of ['#room-name', '#room-name-live']) { const el = $(id); if (el && el !== document.activeElement) el.value = S.name; }
 });
 nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); nameInput.blur(); } });
 nameInput.addEventListener('blur', () => { nameInput.value = S.name; fitName(); });
@@ -701,6 +710,40 @@ let negotiated = false;
 let friendStatus = null;
 let unread = 0;
 const chatLog = [];
+let myToken = null;   // our Google ID token for the current room (bound to it by nonce)
+let pending = null;   // {code, secret} waiting for sign-in
+let roomAllow = [];   // optional: only these Google accounts may join
+let roomNonce = '';
+let needReauth = false;
+
+/* ---- strict validation of everything a friend sends ---- */
+const PHASES = new Set(['focus', 'short', 'long', 'countdown', 'stopwatch']);
+const TYPES = new Set(['pomodoro', 'countdown', 'stopwatch']);
+const MODES = new Set(['home', 'focus', 'ambient']);
+const REACTS = ['👋', '🔥', '💪', '☕', '🎉', '❤️'];
+const MAX_MS = 24 * 3600e3;
+const num = (v, lo, hi) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null);
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const throttle = (ms) => { let t = 0; return () => { const n = Date.now(); if (n - t < ms) return false; t = n; return true; }; };
+const allowReact = throttle(600), allowEvent = throttle(1500), allowChat = throttle(250), allowTimerToast = throttle(1200), allowScene = throttle(5000);
+
+function cleanSnap(s) {
+  if (!s || typeof s !== 'object' || !TYPES.has(s.type) || !PHASES.has(s.phase)) return null;
+  if (s.type === 'pomodoro' ? !['focus', 'short', 'long'].includes(s.phase) : s.phase !== s.type) return null;
+  const totalMs = num(s.totalMs, 0, MAX_MS), remainingMs = num(s.remainingMs, 0, MAX_MS), sw = num(s.swElapsedMs, 0, MAX_MS);
+  if (totalMs == null || remainingMs == null || sw == null) return null;
+  return { type: s.type, phase: s.phase, running: s.running === true, totalMs, remainingMs: Math.min(remainingMs, totalMs || remainingMs), swElapsedMs: sw, cycle: (num(s.cycle, 0, 12) ?? 0) | 0 };
+}
+
+function cleanStatus(m) {
+  if (!TYPES.has(m.type) || !PHASES.has(m.phase)) return null;
+  const totalMs = num(m.totalMs, 0, MAX_MS), value = num(m.value, 0, MAX_MS);
+  if (totalMs == null || value == null) return null;
+  return {
+    mode: MODES.has(m.mode) ? m.mode : 'home', type: m.type, phase: m.phase, running: m.running === true, value, totalMs,
+    task: str(m.task, 200), todayMin: num(m.todayMin, 0, 1440) ?? 0, sessions: (num(m.sessions, 0, 500) ?? 0) | 0, at: Date.now(),
+  };
+}
 
 function friendValue(fs) {
   const age = Date.now() - fs.at + room.latency;
@@ -739,13 +782,12 @@ function setSync(on, { announce = true, snap } = {}) {
 }
 
 function negotiateSync() {
-  // only the room's anchor (host) decides, once per connection
   if (room.role !== 'host' || negotiated || !friendStatus) return;
   negotiated = true;
   if (!S.roomSyncDefault) { setSync(false); return; }
   if (!timer.state.running && friendStatus.running) {
     syncOn = true;
-    room.send({ t: 'sync', on: true, lead: 'you' }); // friend's running timer wins
+    room.send({ t: 'sync', on: true, lead: 'you' });
     renderRoom();
   } else setSync(true);
 }
@@ -756,13 +798,92 @@ function addChat(entry) {
   renderChat();
 }
 
+/* ---- Google sign-in, bound to one room ---- */
+const tokenKey = (code) => `focusroom:token:${code}`;
+function tokenFor(code, nonce) {
+  let t = myToken;
+  if (!t) { try { t = sessionStorage.getItem(tokenKey(code)); } catch { t = null; } }
+  try { if (t && tokenTtl(t) > 60 && decodeJwt(t).payload.nonce === nonce) return t; } catch { /* bad token */ }
+  return null;
+}
+const me = () => (myToken ? profileFromToken(myToken) : null);
+
+room.getToken = () => (myToken && tokenTtl(myToken) > 30 ? myToken : null);
+room.verifyPeer = (token) => verifyIdToken(token, { nonce: roomNonce, allow: roomAllow });
+
+function onSignedIn(token) {
+  try { if (decodeJwt(token).payload.nonce !== roomNonce) { toast('That sign-in was for a different room — please try again'); return; } } catch { return; }
+  myToken = token;
+  try { sessionStorage.setItem(tokenKey(pending?.code || room.code), token); } catch { /* private mode */ }
+  if (pending) { const p = pending; pending = null; enterRoom(p.code, p.secret); }
+  else if (needReauth) { needReauth = false; room.setToken(); }
+  renderRoom();
+}
+
+async function mountSignIn(el) {
+  if (!el) return;
+  try { await renderSignIn(el, roomNonce, onSignedIn); } catch (e) {
+    el.innerHTML = '';
+    el.append(h('p', { class: 'note', text: e.message || 'Google sign-in couldn’t load. Check your connection and try again.' }));
+  }
+}
+
+async function startRoom(code, secret) {
+  if (!authConfigured()) { toast('Google sign-in isn’t set up yet, so rooms are off'); openPanel('room'); return; }
+  room.leave(true);
+  roomNonce = await sha256b64u(roomNonceInput(code, secret));
+  const saved = load('lastRoom', null);
+  roomAllow = saved && saved.code === code && Array.isArray(saved.allow) ? saved.allow.filter((e) => typeof e === 'string').slice(0, 5) : [];
+  save('lastRoom', { code, secret, allow: roomAllow });
+  setUrlInvite(code, secret);
+  const t = tokenFor(code, roomNonce);
+  if (t) { myToken = t; enterRoom(code, secret); return; }
+  myToken = null;
+  pending = { code, secret };
+  if (openId !== 'room') openPanel('room');
+  renderRoom();
+}
+
+function enterRoom(code, secret) {
+  friendStatus = null; negotiated = false; syncOn = false; chatLog.length = 0; unread = 0; needReauth = false;
+  room.join(code, secret);
+  renderRoom(); renderChat();
+}
+
+function leaveRoom() {
+  room.leave();
+  pending = null; friendStatus = null; syncOn = false; needReauth = false;
+  setUrlInvite('');
+  renderRoom(); updateChip();
+}
+
+function signOutGoogle() {
+  leaveRoom();
+  myToken = null;
+  try { Object.keys(sessionStorage).filter((k) => k.startsWith('focusroom:token:')).forEach((k) => sessionStorage.removeItem(k)); } catch { /* noop */ }
+  signOut();
+  toast('Signed out of Google on focusroom');
+}
+
+function inviteLink() {
+  return `${location.origin}${location.pathname}#r=${room.code || pending?.code}.${room.secret || pending?.secret}`;
+}
+
+function setUrlInvite(code, secret) {
+  const u = new URL(location.href);
+  u.searchParams.delete('room'); // links from the old, unencrypted version
+  u.hash = code ? `r=${code}.${secret}` : '';
+  history.replaceState(null, '', u.pathname + u.search + u.hash);
+}
+
+/* ---- room events ---- */
 room.on('state', (st) => {
-  if (st !== 'connected') { negotiated = false; }
+  if (st !== 'connected') negotiated = false;
   renderRoom(); updateChip();
 });
 room.on('friend', (f, first) => {
   if (first) {
-    toast(`${f.name} joined your room 👋`);
+    toast(`${f.givenName} joined · verified Google account 🔒`);
     addChat({ sys: `${f.name} joined` });
     floatEmoji('👋', 3);
   }
@@ -774,34 +895,59 @@ room.on('friend-left', (reason) => {
   friendStatus = null;
   negotiated = false;
   if (reason === 'left') { toast(`${n} left the room`); addChat({ sys: `${n} left` }); }
-  else toast(`Lost connection to ${n} — reconnecting…`);
+  else if (reason !== 'denied') toast(`Lost connection to ${n} — reconnecting…`);
   renderRoom(); updateChip();
 });
+room.on('need-token', () => {
+  needReauth = true;
+  toast('Your Google sign-in expired — sign in again to reconnect');
+  promptSignIn(roomNonce, onSignedIn).catch(() => {});
+  if (openId !== 'room') openPanel('room');
+  renderRoom();
+});
+const REJECT_TEXT = {
+  badkey: 'Blocked a connection that didn’t have your full invite link',
+  'not-allowed': 'Blocked someone who isn’t on your room lock',
+};
+room.on('rejected', (reason) => {
+  if (String(reason).startsWith('by-peer-')) { toast('The other person’s room settings didn’t let you in'); return; }
+  toast(REJECT_TEXT[reason] || 'Blocked a connection that failed the Google sign-in check');
+});
+
+const TIMER_VERBS = { start: 'started', pause: 'paused', skip: 'skipped to the next session on', reset: 'reset', phase: 'switched', type: 'changed' };
 room.on('message', (msg) => {
   switch (msg.t) {
-    case 'status':
-      friendStatus = { ...msg, at: Date.now() };
+    case 'status': {
+      const c = cleanStatus(msg);
+      if (!c) return;
+      friendStatus = c;
       negotiateSync();
       updateFriendCard(); updateChip();
       break;
-    case 'sync':
-      syncOn = !!msg.on;
-      if (msg.snap) timer.apply(msg.snap, room.latency);
-      if (msg.lead === 'you') room.send({ t: 'timer', snap: timer.snapshot(), action: 'sync' });
+    }
+    case 'sync': {
+      if (typeof msg.on !== 'boolean') return;
+      const snap = msg.snap === undefined ? null : cleanSnap(msg.snap);
+      if (msg.snap !== undefined && !snap) return;
+      syncOn = msg.on;
+      if (snap && syncOn) timer.apply(snap, room.latency);
+      if (msg.lead === 'you' && syncOn) room.send({ t: 'timer', snap: timer.snapshot(), action: 'sync' });
       if (negotiated || room.role === 'guest') toast(syncOn ? `Timers synced with ${firstName()}` : `${firstName()} turned timer sync off`);
       negotiated = true;
       renderRoom();
       break;
-    case 'timer':
+    }
+    case 'timer': {
       if (!syncOn) break;
-      timer.apply(msg.snap, room.latency);
-      if (['start', 'pause', 'skip', 'reset', 'phase', 'type'].includes(msg.action)) {
-        const verb = { start: 'started', pause: 'paused', skip: 'skipped to the next session on', reset: 'reset', phase: 'switched', type: 'changed' }[msg.action];
-        toast(`${firstName()} ${verb} the timer`, { timeout: 2600 });
-      }
+      const snap = cleanSnap(msg.snap);
+      if (!snap) break;
+      timer.apply(snap, room.latency);
+      if (TIMER_VERBS[msg.action] && Object.hasOwn(TIMER_VERBS, msg.action) && allowTimerToast()) toast(`${firstName()} ${TIMER_VERBS[msg.action]} the timer`, { timeout: 2600 });
       break;
+    }
     case 'chat': {
-      const text = String(msg.text || '').slice(0, 500);
+      const text = str(msg.text, 500).trim();
+      if (!text || !allowChat()) break;
       addChat({ who: 'them', text });
       if (!$('#panel-room').classList.contains('open')) {
         unread++;
@@ -811,19 +957,24 @@ room.on('message', (msg) => {
       break;
     }
     case 'react':
-      if (typeof msg.emoji === 'string' && msg.emoji.length <= 8) { floatEmoji(msg.emoji, 6); toast(`${firstName()} sent ${msg.emoji}`, { timeout: 2600 }); }
+      if (REACTS.includes(msg.emoji) && allowReact()) { floatEmoji(msg.emoji, 6); toast(`${firstName()} sent ${msg.emoji}`, { timeout: 2600 }); }
       break;
     case 'event':
-      if (msg.kind === 'complete') { toast(`🎉 ${firstName()} finished a ${fmtDuration(msg.minutes || 0)} focus session`); floatEmoji('🎉', 3); }
-      if (msg.kind === 'task') toast(`✅ ${firstName()} finished “${String(msg.text || '').slice(0, 40)}”`);
+      if (!allowEvent()) break;
+      if (msg.kind === 'complete') { const m = num(msg.minutes, 0, 600) ?? 0; toast(`🎉 ${firstName()} finished a ${fmtDuration(m)} focus session`); floatEmoji('🎉', 3); }
+      if (msg.kind === 'task') toast(`✅ ${firstName()} finished “${str(msg.text, 40)}”`);
       break;
     case 'scene': {
-      const def = allScenes().find((s) => s.id === msg.id);
-      if (def) toast(`${firstName()} shared the “${def.name}” theme`, { action: { label: 'Use it', fn: () => setScene(def.id) }, timeout: 8000 });
-      else if (typeof msg.url === 'string' && /^https:\/\//.test(msg.url)) {
-        toast(`${firstName()} shared a background`, {
+      if (!allowScene()) break;
+      const builtIn = typeof msg.id === 'string' ? [...CANVAS_SCENES, ...PHOTO_SCENES].find((s) => s.id === msg.id) : null;
+      if (builtIn) { toast(`${firstName()} shared the “${builtIn.name}” theme`, { action: { label: 'Use it', fn: () => setScene(builtIn.id) }, timeout: 8000 }); break; }
+      const url = str(msg.url, 2048);
+      if (/^https:\/\/[^\s"'()\\<>]+$/.test(url)) {
+        let host = '';
+        try { host = new URL(url).hostname; } catch { break; }
+        toast(`${firstName()} shared a background from ${host}`, {
           timeout: 8000,
-          action: { label: 'Use it', fn: () => { const c = { id: `c${uid(6)}`, name: msg.name || 'Shared', url: msg.url }; customScenes.push(c); save('customScenes', customScenes); renderThemeGrids(); setScene(c.id); } },
+          action: { label: 'Use it', fn: () => { const c = { id: `c${uid(6)}`, name: str(msg.name, 30) || 'Shared', url }; customScenes.push(c); save('customScenes', customScenes); renderThemeGrids(); setScene(c.id); } },
         });
       }
       break;
@@ -831,44 +982,14 @@ room.on('message', (msg) => {
   }
 });
 
-function inviteLink() {
-  const u = new URL(location.href);
-  u.search = ''; u.hash = '';
-  u.searchParams.set('room', room.code);
-  return u.toString();
-}
-
-function setUrlRoom(code) {
-  const u = new URL(location.href);
-  if (code) u.searchParams.set('room', code); else u.searchParams.delete('room');
-  history.replaceState(null, '', u);
-}
-
-function joinRoom(code) {
-  if (!code) return;
-  friendStatus = null; negotiated = false; syncOn = false; chatLog.length = 0; unread = 0;
-  room.join(code);
-  save('lastRoom', code);
-  setUrlRoom(code);
-  renderRoom(); renderChat();
-}
-
-function leaveRoom() {
-  room.leave();
-  friendStatus = null; syncOn = false;
-  setUrlRoom('');
-  renderRoom(); updateChip();
-}
-
+/* ---- room panel ---- */
 function buildRoomPanel() {
   const p = $('#panel-room');
-  const nameIn = h('input', { class: 'field', id: 'room-name', placeholder: 'Your name', maxlength: 30, value: S.name });
-  nameIn.addEventListener('input', () => { S.name = nameIn.value.trim(); nameEl.textContent = S.name; persist(); announceName(); });
-  const codeIn = h('input', { class: 'field', placeholder: 'Room code or invite link', id: 'room-code-in' });
+  const codeIn = h('input', { class: 'field', placeholder: 'Paste the invite link', id: 'room-code-in', autocomplete: 'off' });
   const doJoin = () => {
-    const c = parseRoomCode(codeIn.value);
-    if (c.length < 4) { toast('Enter the room code or paste the invite link'); return; }
-    codeIn.value = ''; joinRoom(c);
+    const inv = parseInvite(codeIn.value);
+    if (!inv) { toast('Paste the whole invite link — it contains the room’s secret key'); return; }
+    codeIn.value = ''; startRoom(inv.code, inv.secret);
   };
   codeIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
 
@@ -876,14 +997,26 @@ function buildRoomPanel() {
     h('div', { class: 'room-hero' },
       h('div', { class: 'emoji', text: '🫶' }),
       h('h4', { text: 'Study with a friend' }),
-      h('p', { class: 'note', text: 'Open a private room for you and one friend. Run the same timer, see what each other is working on, and cheer each other on.' })),
-    h('h3', { text: 'Your name' }), nameIn,
-    h('button', { class: 'btn solid', style: { width: '100%', marginTop: '12px', padding: '12px' }, html: `${icon('sparkles')}Create a room`, onclick: () => joinRoom(newRoomCode()) }),
+      h('p', { class: 'note', text: 'A private room for you and one friend: run the same timer, see what each other is working on, and cheer each other on.' })),
+    h('ul', { class: 'sec-list' },
+      h('li', { html: `${icon('check')}<span><b>Google sign-in</b> — you both see each other’s verified Google name and photo</span>` }),
+      h('li', { html: `${icon('check')}<span><b>End-to-end encrypted</b> — the key lives only in your invite link</span>` }),
+      h('li', { html: `${icon('check')}<span><b>Nothing stored on a server</b> — messages go browser to browser</span>` })),
+    h('p', { class: 'note', id: 'room-noauth', hidden: true, text: 'Rooms are turned off until Google sign-in is configured for this site.' }),
+    h('button', { class: 'btn solid', id: 'room-create', style: { width: '100%', marginTop: '6px', padding: '12px' }, html: `${icon('sparkles')}Create a room`, onclick: () => { const r = newRoom(); startRoom(r.code, r.secret); } }),
     h('h3', { text: 'Have an invite?' }),
-    h('div', { class: 'row' }, codeIn, h('button', { class: 'btn', text: 'Join', onclick: doJoin })),
-    h('button', { class: 'btn small', id: 'room-rejoin', style: { marginTop: '10px' }, hidden: true, onclick: () => joinRoom(load('lastRoom', '')) }),
-    h('p', { class: 'note', id: 'room-unsupported', hidden: true, text: 'Rooms need a browser with WebRTC (recent Chrome, Edge, Firefox or Safari).' }),
-    h('p', { class: 'note', style: { marginTop: '14px' }, text: 'Rooms are peer-to-peer: your timer, status and messages go straight to your friend’s browser and aren’t stored on a server.' }),
+    h('div', { class: 'row' }, codeIn, h('button', { class: 'btn', id: 'room-join', text: 'Join', onclick: doJoin })),
+    h('button', { class: 'btn small', id: 'room-rejoin', style: { marginTop: '10px' }, hidden: true, onclick: () => { const l = load('lastRoom', null); if (l?.code && l?.secret) startRoom(l.code, l.secret); } }),
+    h('p', { class: 'note', id: 'room-unsupported', hidden: true, text: 'Rooms need a recent browser (Chrome, Edge, Firefox or Safari).' }),
+  );
+
+  const signin = h('div', { id: 'room-signin', hidden: true },
+    h('div', { class: 'room-hero' },
+      h('div', { class: 'emoji', text: '🔐' }),
+      h('h4', { text: 'Sign in to enter the room' }),
+      h('p', { class: 'note', text: 'Your friend will see your Google name, email address and profile photo — nothing else from your Google account. Your sign-in only works for this one room.' })),
+    h('div', { class: 'gsi-slot', id: 'room-signin-btn' }),
+    h('button', { class: 'btn small', style: { marginTop: '12px' }, text: 'Cancel', onclick: leaveRoom }),
   );
 
   const syncTog = h('span', { id: 'sync-toggle' });
@@ -897,14 +1030,31 @@ function buildRoomPanel() {
   };
   chatIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
 
+  const lockIn = h('input', { class: 'field', type: 'email', id: 'lock-in', placeholder: 'friend@gmail.com', autocomplete: 'off', style: { padding: '7px 10px' } });
+  const applyLock = () => {
+    const v = lockIn.value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast('Enter your friend’s Google email address'); return; }
+    roomAllow = [v];
+    save('lastRoom', { ...load('lastRoom', {}), allow: roomAllow });
+    lockIn.value = '';
+    if (room.connected && room.friend && room.friend.email !== v) { room.kick('not-allowed'); toast('Room locked — the current person isn’t that account, so they were removed'); }
+    else toast(`Room locked to ${v}`);
+    renderRoom();
+  };
+  lockIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyLock(); });
+
   const live = h('div', { id: 'room-live', hidden: true },
     h('div', { class: 'room-code' },
       h('span', { html: icon('link') }), h('code', { id: 'room-code-text' }),
-      h('button', { class: 'btn small', html: `${icon('copy')}Copy link`, id: 'room-copy', onclick: copyInvite })),
+      h('button', { class: 'btn small', html: `${icon('copy')}Copy invite`, id: 'room-copy', onclick: copyInvite })),
+    h('div', { class: 'e2e-line', html: `${icon('check')}<span>End-to-end encrypted · only people with this exact link and a Google sign-in can join</span>` }),
     h('div', { class: 'room-status', id: 'room-status' }, h('i', { class: 'pulse' }), h('span', { id: 'room-status-text' })),
+    h('div', { id: 'room-reauth', hidden: true },
+      h('p', { class: 'note', text: 'Your Google sign-in expired. Sign in again to reconnect:' }),
+      h('div', { class: 'gsi-slot', id: 'room-reauth-btn' })),
     h('div', { id: 'friend-slot' }),
     h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', text: 'Start, pause and skip together' })), syncTog),
-    h('div', { class: 'reacts', id: 'reacts' }, ...['👋', '🔥', '💪', '☕', '🎉', '❤️'].map((e) => h('button', {
+    h('div', { class: 'reacts', id: 'reacts' }, ...REACTS.map((e) => h('button', {
       text: e, title: `Send ${e}`, onclick: () => {
         if (room.send({ t: 'react', emoji: e })) floatEmoji(e, 2); else toast('Your friend isn’t connected right now');
       },
@@ -912,64 +1062,101 @@ function buildRoomPanel() {
     h('div', { class: 'chat' },
       h('div', { class: 'chat-log', id: 'chat-log' }),
       h('div', { class: 'chat-form' }, chatIn, h('button', { class: 'icon-btn', html: icon('send'), title: 'Send', onclick: sendChat }))),
-    h('div', { class: 'row between', style: { marginTop: '12px' } },
+    h('h3', { text: 'Who can join' }),
+    h('div', { id: 'lock-state', class: 'note' }),
+    h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
+    h('div', { class: 'row between', style: { marginTop: '14px' } },
       h('button', {
         class: 'btn small', html: `${icon('image')}Share my theme`, onclick: () => {
           const def = allScenes().find((s) => s.id === S.scene);
           if (!room.connected) { toast('Your friend isn’t connected right now'); return; }
           if (def?.custom && def.url.startsWith('data:')) { toast('Uploaded photos stay on your device — share a built-in theme or an image link'); return; }
-          room.send({ t: 'scene', id: def.custom ? null : def.id, url: def.custom ? def.url : undefined, name: def.name });
+          room.send(def.custom ? { t: 'scene', url: def.url, name: def.name } : { t: 'scene', id: def.id });
           toast('Theme sent');
         },
       }),
       h('button', { class: 'btn small danger', html: `${icon('log-out')}Leave room`, onclick: leaveRoom })),
-    h('div', { class: 'row', style: { marginTop: '12px', fontSize: '13px', color: 'var(--muted)' } }, 'You’re ',
-      h('input', { class: 'field', id: 'room-name-live', value: S.name, placeholder: 'your name', maxlength: 30, style: { width: '140px', padding: '5px 9px' }, oninput: (e) => { S.name = e.target.value.trim(); nameEl.textContent = S.name; persist(); announceName(); } })),
+    h('div', { class: 'row between', id: 'me-line', style: { marginTop: '12px', fontSize: '13px', color: 'var(--muted)' } }),
   );
 
-  const full = h('div', { id: 'room-full', hidden: true },
-    h('div', { class: 'room-hero' }, h('div', { class: 'emoji', text: '🚪' }), h('h4', { text: 'This room is full' }),
-      h('p', { class: 'note', text: 'Rooms are for two. Ask your friend for a new link, or create your own room.' })),
+  const stopped = h('div', { id: 'room-stopped', hidden: true },
+    h('div', { class: 'room-hero' }, h('div', { class: 'emoji', id: 'stopped-emoji' }), h('h4', { id: 'stopped-title' }), h('p', { class: 'note', id: 'stopped-text' })),
     h('button', { class: 'btn solid', style: { width: '100%' }, text: 'Back', onclick: leaveRoom }));
 
-  p.append(panelHead('Study room'), idle, live, full);
+  p.append(panelHead('Study room'), idle, signin, live, stopped);
   renderRoom();
 }
 
 async function copyInvite() {
   const link = inviteLink();
   if (navigator.share && matchMedia('(pointer: coarse)').matches) {
-    try { await navigator.share({ title: 'Study with me on focusroom', text: 'Join my focus room:', url: link }); return; } catch { /* fall through */ }
+    try { await navigator.share({ title: 'Study with me on focusroom', text: 'Join my focus room (sign in with Google):', url: link }); return; } catch { /* fall through */ }
   }
-  try { await navigator.clipboard.writeText(link); toast('Invite link copied — send it to your friend'); }
-  catch { prompt('Copy this invite link:', link); }
+  try { await navigator.clipboard.writeText(link); toast('Invite link copied — send it privately to your friend'); }
+  catch { prompt('Copy this invite link and send it privately:', link); }
 }
 
 const STATUS_TEXT = {
   connecting: 'Opening the room…',
-  waiting: 'Waiting for your friend — send them the link',
-  connected: 'Connected',
+  waiting: 'Waiting for your friend — send them the invite link',
+  verifying: 'Checking the invite key and Google sign-in…',
   reconnecting: 'Reconnecting…',
   error: 'Couldn’t connect',
+};
+const STOPPED = {
+  full: ['🚪', 'This room is full', 'Rooms are for two. Ask your friend for a new link, or create your own room.'],
+  badkey: ['🔑', 'Couldn’t verify this room', 'The invite link may be incomplete or out of date — or someone else is using this room code. Ask your friend for a fresh link.'],
+  error: ['⚠️', 'Couldn’t open the room', ''],
+};
+const DENIED_TEXT = {
+  'not-allowed': 'This room is locked to a different Google account.',
+  'wrong-room': 'Your Google sign-in didn’t match this room. Leave and try the invite link again.',
+  'peer-not-allowed': 'You locked this room to a different Google account than the person in it.',
 };
 
 function renderRoom() {
   if (!$('#room-idle')) return;
   const st = room.state;
-  const inRoom = !['idle', 'full'].includes(st);
-  $('#room-idle').hidden = st !== 'idle';
+  const stopped = ['full', 'badkey', 'denied', 'error'].includes(st);
+  const inRoom = !['idle', ...['full', 'badkey', 'denied', 'error']].includes(st);
+  const signingIn = st === 'idle' && !!pending;
+  $('#room-idle').hidden = st !== 'idle' || signingIn;
+  $('#room-signin').hidden = !signingIn;
   $('#room-live').hidden = !inRoom;
-  $('#room-full').hidden = st !== 'full';
-  const last = load('lastRoom', '');
-  $('#room-rejoin').hidden = !last || st !== 'idle';
-  $('#room-rejoin').textContent = `Rejoin last room (${last})`;
+  $('#room-stopped').hidden = !stopped;
+
+  const configured = authConfigured();
+  $('#room-noauth').hidden = configured;
+  $('#room-create').disabled = !configured;
+  $('#room-join').disabled = !configured;
+  const last = load('lastRoom', null);
+  $('#room-rejoin').hidden = !configured || !last?.code || !last?.secret || st !== 'idle';
+  if (last?.code) $('#room-rejoin').textContent = `Rejoin last room (${last.code})`;
   $('#room-unsupported').hidden = roomSupported();
+
+  if (signingIn) {
+    const slot = $('#room-signin-btn');
+    if (slot._nonce !== roomNonce) { slot._nonce = roomNonce; mountSignIn(slot); }
+  }
+
+  if (stopped) {
+    let [emoji, title, text] = STOPPED[st] || ['🔒', 'You weren’t let in', ''];
+    if (st === 'denied') {
+      const d = String(room.stateDetail || '');
+      text = DENIED_TEXT[d] || (d.startsWith('peer-') ? 'The other person’s Google sign-in couldn’t be verified, so you weren’t connected.' : 'Your friend’s browser couldn’t verify your Google sign-in.');
+    }
+    if (st === 'error') text = room.stateDetail || 'Something went wrong. Try again in a moment.';
+    $('#stopped-emoji').textContent = emoji; $('#stopped-title').textContent = title; $('#stopped-text').textContent = text;
+  }
+
   if (inRoom) {
     $('#room-code-text').textContent = room.code;
     const status = $('#room-status');
     status.classList.toggle('ok', st === 'connected');
-    status.classList.toggle('bad', st === 'error');
-    $('#room-status-text').textContent = st === 'connected' ? `Connected with ${room.friend?.name || 'your friend'}` : STATUS_TEXT[st] || st;
+    $('#room-status-text').textContent = st === 'connected' ? `Connected with ${room.friend?.name || 'your friend'} · verified & encrypted` : STATUS_TEXT[st] || st;
+    const reauth = $('#room-reauth');
+    reauth.hidden = !needReauth;
+    if (needReauth) { const slot = $('#room-reauth-btn'); if (slot._nonce !== roomNonce + needReauth) { slot._nonce = roomNonce + needReauth; mountSignIn(slot); } }
     const sync = $('#sync-toggle');
     sync.innerHTML = '';
     sync.append(toggleEl(syncOn, (v) => {
@@ -977,52 +1164,80 @@ function renderRoom() {
       setSync(v); toast(v ? `Timers synced with ${firstName()}` : 'Timer sync off');
     }));
     $('#sync-row').style.opacity = room.connected ? 1 : 0.5;
-    const rnl = $('#room-name-live'); if (rnl !== document.activeElement) rnl.value = S.name;
+    const lockState = $('#lock-state');
+    lockState.innerHTML = '';
+    if (roomAllow.length) {
+      lockState.append(`🔒 Only ${roomAllow.join(', ')} can join. `, h('button', {
+        class: 'btn small', text: 'Unlock', onclick: () => { roomAllow = []; save('lastRoom', { ...load('lastRoom', {}), allow: [] }); renderRoom(); toast('Room unlocked'); },
+      }));
+    } else lockState.textContent = 'Anyone with this invite link who signs in with Google. Lock it to one account:';
+    $('#lock-form').hidden = roomAllow.length > 0;
+    const meLine = $('#me-line');
+    meLine.innerHTML = '';
+    const p = me();
+    if (p) meLine.append(h('span', { text: `Signed in as ${p.email}` }), h('button', { class: 'btn small', text: 'Sign out', onclick: signOutGoogle }));
   }
   updateFriendCard();
   updateSyncBadge();
   updateRoomDot();
 }
 
+function avatarEl(f, cls) {
+  const a = h('div', { class: `avatar ${cls}` });
+  if (f.picture) a.append(h('img', { src: f.picture, alt: '', referrerpolicy: 'no-referrer', onerror: (e) => { e.target.remove(); a.textContent = (f.name || '?')[0].toUpperCase(); } }));
+  else a.textContent = (f.name || '?').trim()[0]?.toUpperCase() || '?';
+  return a;
+}
+
 function updateFriendCard() {
   const slot = $('#friend-slot');
   if (!slot) return;
-  if (!room.friend || room.state === 'idle') { slot.innerHTML = ''; return; }
+  if (!room.friend || ['idle', 'full', 'badkey', 'denied', 'error'].includes(room.state)) { slot.innerHTML = ''; slot._sub = null; return; }
   const f = room.friend;
   const [what, time] = friendActivity(room.connected ? friendStatus : null);
-  const card = slot.firstChild?.classList?.contains('friend-card') ? slot.firstChild : null;
-  const html = '<div class="avatar lg"></div><div class="who"><div class="name"></div><div class="what"></div><div class="task-line"></div></div><div class="ftime"></div>';
-  let el = card;
-  if (!el) { el = h('div', { class: 'friend-card', html }); slot.innerHTML = ''; slot.append(el); }
+  let el = slot.firstChild;
+  if (!el || slot._sub !== f.sub) {
+    slot.innerHTML = '';
+    slot._sub = f.sub;
+    el = h('div', { class: 'friend-card' },
+      avatarEl(f, 'lg'),
+      h('div', { class: 'who' },
+        h('div', { class: 'name' }, h('span', { class: 'nm' }), h('span', { class: 'verified', title: 'Verified Google account', html: icon('circle-check') })),
+        h('div', { class: 'email' }), h('div', { class: 'what' }), h('div', { class: 'task-line' })),
+      h('div', { class: 'ftime' }));
+    slot.append(el);
+  }
   el.classList.toggle('offline', !room.connected);
-  $('.avatar', el).style.setProperty('--c', f.color || '#b9adff');
-  $('.avatar', el).textContent = (f.name || '?').trim()[0]?.toUpperCase() || '?';
-  $('.name', el).textContent = f.name;
+  $('.nm', el).textContent = f.name;
+  $('.email', el).textContent = f.email;
   $('.what', el).textContent = room.connected ? what : 'Offline — they’ll reconnect when they’re back';
-  $('.task-line', el).innerHTML = '';
-  if (room.connected && friendStatus?.task) $('.task-line', el).append(h('em', { text: 'Working on ' }), friendStatus.task);
+  const tl = $('.task-line', el);
+  tl.innerHTML = '';
+  if (room.connected && friendStatus?.task) tl.append(h('em', { text: 'Working on ' }), friendStatus.task);
   $('.ftime', el).textContent = room.connected ? time : '';
 }
 
 function updateChip() {
   const chip = $('#friend-chip');
   const st = room.state;
-  if (st === 'idle' || st === 'full' || st === 'error') { chip.hidden = true; return; }
+  if (['idle', 'full', 'badkey', 'denied', 'error'].includes(st)) { chip.hidden = true; chip._sub = null; return; }
   chip.hidden = false;
   const f = room.friend;
   if (room.connected && f) {
     const [what, time] = friendActivity(friendStatus);
-    const html = '<span class="avatar sm"></span><span class="live"></span><span class="t"></span>';
-    if (!chip._live) { chip.innerHTML = html; chip._live = true; }
-    $('.avatar', chip).textContent = (f.name || '?')[0].toUpperCase();
-    $('.avatar', chip).style.setProperty('--c', f.color || '#b9adff');
-    $('.t', chip).innerHTML = '';
-    $('.t', chip).append(h('b', { text: f.name.split(' ')[0] }), h('span', { class: 'muted', text: ` · ${what}${time ? ` ${time}` : ''}` }));
+    if (chip._sub !== f.sub) {
+      chip._sub = f.sub;
+      chip.innerHTML = '';
+      chip.append(avatarEl(f, 'sm'), h('span', { class: 'live' }), h('span', { class: 't' }));
+    }
+    const t = $('.t', chip);
+    t.innerHTML = '';
+    t.append(h('b', { text: f.givenName || f.name.split(' ')[0] }), h('span', { class: 'muted', text: ` · ${what}${time ? ` ${time}` : ''}` }));
   } else {
-    chip._live = false;
+    chip._sub = null;
     chip.innerHTML = '';
     chip.append(h('span', { html: icon('users'), style: { display: 'grid', placeItems: 'center', width: '28px' } }),
-      h('span', { class: 'muted', text: st === 'waiting' ? 'Room open · waiting for your friend' : st === 'reconnecting' ? 'Reconnecting to your friend…' : 'Opening room…' }));
+      h('span', { class: 'muted', text: st === 'waiting' ? 'Room open · waiting for your friend' : st === 'verifying' ? 'Verifying your friend…' : st === 'reconnecting' ? 'Reconnecting to your friend…' : 'Opening room…' }));
   }
 }
 $('#friend-chip').addEventListener('click', () => openPanel('room'));
@@ -1036,7 +1251,7 @@ function updateSyncBadge() {
 
 function updateRoomDot() {
   const dot = $('#room-dot');
-  const active = room.state !== 'idle' && room.state !== 'full';
+  const active = !['idle', 'full', 'badkey', 'denied', 'error'].includes(room.state);
   dot.hidden = !active && !unread;
   dot.classList.toggle('unread', unread > 0);
 }
@@ -1045,7 +1260,7 @@ function renderChat() {
   const log = $('#chat-log');
   if (!log) return;
   log.innerHTML = '';
-  if (!chatLog.length) log.append(h('div', { class: 'sys', text: 'Messages go straight to your friend and disappear when you leave.' }));
+  if (!chatLog.length) log.append(h('div', { class: 'sys', text: 'Messages are end-to-end encrypted and disappear when you leave.' }));
   for (const m of chatLog) {
     if (m.sys) log.append(h('div', { class: 'sys', text: m.sys }));
     else log.append(h('div', { class: `msg ${m.who}`, text: m.text }));
@@ -1155,15 +1370,23 @@ setMode(['home', 'focus', 'ambient'].includes(S.mode) ? S.mode : 'home');
 renderClock(); renderQuote(); renderMainFocus(); renderTimer(); updateRoomDot();
 sound.master = S.masterVolume;
 
-// open the invite link straight into the room
-const startCode = parseRoomCode(new URLSearchParams(location.search).get('room') || '');
+// open an invite link (#r=code.secret) straight into the room
 function bootRoom() {
-  if (!startCode) return;
-  joinRoom(startCode);
-  openPanel('room');
-  if (!S.name) setTimeout(() => $('#room-name-live')?.focus(), 200);
+  if (new URLSearchParams(location.search).has('room')) {
+    setUrlInvite('');
+    toast('That invite is from an older version of focusroom — ask your friend for a new link', { timeout: 8000 });
+    return;
+  }
+  const inv = parseInvite(location.hash);
+  if (inv) startRoom(inv.code, inv.secret);
 }
-if (window.Peer) bootRoom(); else addEventListener('load', bootRoom);
+bootRoom();
+addEventListener('hashchange', () => {
+  const inv = parseInvite(location.hash);
+  if (inv && inv.code !== room.code && inv.code !== pending?.code) startRoom(inv.code, inv.secret);
+});
 
-// expose for debugging / tests
-window.focusroom = { timer, room, sound, S, get syncOn() { return syncOn; }, get friendStatus() { return friendStatus; }, DEFAULT_SETTINGS };
+// debugging handle (local development only)
+if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+  window.focusroom = { timer, room, sound, S, get syncOn() { return syncOn; }, get friendStatus() { return friendStatus; }, get myToken() { return myToken; }, DEFAULT_SETTINGS };
+}

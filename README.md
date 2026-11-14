@@ -14,15 +14,27 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Themes:** 8 animated canvas scenes, photo backgrounds, or upload your own
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions
 - **Study room (2 people):**
-  - Create a room, send the link, and you're connected peer-to-peer
+  - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
   - Timers can be synced: start, pause and skip together
   - See what your friend is working on and how long they have left
   - Chat, emoji reactions and theme sharing
   - Either person can drop out and rejoin. A third visitor sees "room full"
 
-## How the room works
+## How the room is secured
 
-There's no backend. [PeerJS](https://peerjs.com) (vendored in `vendor/`) uses the free public PeerJS broker only to introduce the two browsers. After that, everything flows directly between them over WebRTC, and nothing is stored on a server. The room code maps to a fixed peer ID. Whoever arrives first holds it and the other connects to them; if that person leaves, the other takes over the ID.
+- **Sign in with Google (rooms only).** Both people sign in with [Google Identity Services](https://developers.google.com/identity/gsi/web). Each browser checks the *other* person's ID token itself: Google's RS256 signature, issuer, audience (this app's client ID), expiry, verified email, and a nonce tied to this one room, so a token can't be reused in any other room or app. You can also **lock a room** to one Google account.
+- **End-to-end encryption.** The invite link looks like `…/focus-room/#r=<code>.<secret>`. The 128-bit secret lives in the URL fragment, which browsers never send to a server. Every message is sealed with AES-256-GCM using a key derived from it with HKDF. A challenge/response handshake proves the other side holds the key, and sequence numbers block replays. That keeps GitHub, the PeerJS broker and any relay out: they can't read or forge room traffic.
+- **No server of our own.** The public [PeerJS](https://peerjs.com) broker only introduces the two browsers. After that, traffic flows directly over WebRTC. Nothing is stored server-side.
+- **Hardening:**
+  - Strict Content-Security-Policy, and the app refuses to run inside a frame.
+  - Strict validation and rate-limiting of everything a friend sends.
+  - Focus stats only credit time that really passed on your own device.
+  - Test hooks only work on `localhost`.
+- **Still true:** a direct peer-to-peer connection lets each browser learn the other's IP address. Only share invites with people you trust.
+
+### Setup: Google client ID
+
+Create an OAuth **Web application** client in Google Cloud. Its "Authorized JavaScript origin" is `https://avgrobo999.github.io`. Put the client ID (public, not a secret) in `GOOGLE_CLIENT_ID` in `js/auth.js`. Until then, rooms stay disabled and the rest of the app works normally.
 
 ## Run locally
 

@@ -24,6 +24,8 @@ export class Timer extends Emitter {
       cycle: 0, // completed focus sessions in the current set
       swStartedAt: 0,
       swElapsedMs: 0,
+      ranMs: 0,   // time actually run on OUR clock in the current phase (used for logging)
+      runAt: 0,
     };
     this.state.totalMs = this.state.remainingMs = this.phaseMs(this.state.phase);
   }
@@ -49,6 +51,10 @@ export class Timer extends Emitter {
 
   get isBreak() { return this.state.phase === 'short' || this.state.phase === 'long'; }
 
+  /** ms this phase has really been running on this device */
+  ran(now = Date.now()) { const st = this.state; return st.ranMs + (st.running ? Math.max(0, now - st.runAt) : 0); }
+  _resetRun(now = Date.now()) { this.state.ranMs = 0; this.state.runAt = now; }
+
   _changed(action, source = 'local') { this.emit('change', { source, action }); }
 
   start() {
@@ -61,6 +67,7 @@ export class Timer extends Emitter {
       st.endsAt = now + st.remainingMs;
     }
     st.running = true;
+    st.runAt = now;
     this._changed('start');
   }
 
@@ -70,6 +77,7 @@ export class Timer extends Emitter {
     const now = Date.now();
     if (st.type === 'stopwatch') { st.swElapsedMs += now - st.swStartedAt; }
     else st.remainingMs = Math.max(0, st.endsAt - now);
+    st.ranMs += Math.max(0, now - st.runAt);
     st.running = false;
     this._changed('pause');
   }
@@ -81,12 +89,13 @@ export class Timer extends Emitter {
     const st = this.state;
     let swMin = 0;
     if (st.type === 'stopwatch') {
-      swMin = this.value() / 60000;
+      swMin = Math.min(this.value(), this.ran()) / 60000;
       st.swElapsedMs = 0; st.swStartedAt = Date.now();
     } else {
       st.totalMs = st.remainingMs = this.phaseMs(st.phase);
     }
     st.running = false;
+    this._resetRun();
     this._changed('reset');
     return swMin;
   }
@@ -95,7 +104,7 @@ export class Timer extends Emitter {
     const st = this.state;
     if (st.type !== 'pomodoro') { this.reset(); return; }
     if (st.phase === 'focus') {
-      const doneMin = (st.totalMs - this.value()) / 60000;
+      const doneMin = Math.min(st.totalMs - this.value(), this.ran()) / 60000;
       if (doneMin >= 1) this.emit('partial', { minutes: doneMin });
     }
     this._advance(false);
@@ -108,6 +117,7 @@ export class Timer extends Emitter {
     st.phase = phase;
     st.running = false;
     st.totalMs = st.remainingMs = this.phaseMs(phase);
+    this._resetRun();
     this._changed('phase');
   }
 
@@ -119,6 +129,7 @@ export class Timer extends Emitter {
     st.cycle = 0;
     st.swElapsedMs = 0;
     st.totalMs = st.remainingMs = this.phaseMs(st.phase);
+    this._resetRun();
     this._changed('type');
   }
 
@@ -148,6 +159,7 @@ export class Timer extends Emitter {
     }
     st.totalMs = st.remainingMs = this.phaseMs(st.phase);
     st.running = false;
+    this._resetRun();
     if (autoStart) { st.endsAt = Date.now() + st.remainingMs; st.running = true; }
   }
 
@@ -157,7 +169,7 @@ export class Timer extends Emitter {
     if (!st.running || st.type === 'stopwatch') return;
     if (Date.now() >= st.endsAt) {
       const phase = st.phase;
-      const minutes = st.totalMs / 60000;
+      const minutes = Math.min(st.totalMs, this.ran()) / 60000; // only credit time that really passed here
       st.remainingMs = 0;
       if (st.type === 'countdown') {
         st.running = false;
@@ -188,8 +200,11 @@ export class Timer extends Emitter {
     const before = { running: st.running, type: st.type, phase: st.phase, cycle: st.cycle, totalMs: st.totalMs, left: this.value(now) };
     if (before.running && before.type !== 'stopwatch' && before.left < 2500 &&
         (snap.phase !== before.phase || snap.cycle !== before.cycle || (!snap.running && snap.remainingMs >= snap.totalMs - 1000))) {
-      this.emit('complete', { phase: before.phase, minutes: before.totalMs / 60000, type: before.type, viaSync: true });
+      this.emit('complete', { phase: before.phase, minutes: Math.min(before.totalMs, this.ran(now)) / 60000, type: before.type, viaSync: true });
     }
+    const samePhase = snap.type === st.type && snap.phase === st.phase && snap.cycle === st.cycle;
+    if (!samePhase) this._resetRun(now);
+    else { st.ranMs = this.ran(now); st.runAt = now; }
     st.type = snap.type;
     st.phase = snap.phase;
     st.cycle = snap.cycle | 0;
