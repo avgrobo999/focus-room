@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116h';
-import { icon } from './icons.js?v=20261116h';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116h';
-import { quoteOfTheDay } from './quotes.js?v=20261116h';
-import { Timer } from './timer.js?v=20261116h';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116h';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116h';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116h';
-import { Voice, voiceSupported } from './voice.js?v=20261116h';
-import { Ringtone } from './ring.js?v=20261116h';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116h';
-import { sha256b64u } from './crypto.js?v=20261116h';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116i';
+import { icon } from './icons.js?v=20261116i';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116i';
+import { quoteOfTheDay } from './quotes.js?v=20261116i';
+import { Timer } from './timer.js?v=20261116i';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116i';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116i';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116i';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116i';
+import { Ringtone } from './ring.js?v=20261116i';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116i';
+import { sha256b64u } from './crypto.js?v=20261116i';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -767,7 +767,10 @@ const MAX_LOCK = 5;
 /* ---- voice ---- */
 const volumes = load('voiceVolumes', {}); // Google sub -> 0…1
 const volumeOf = (mid) => { const m = room.members.get(mid); const v = m && Object.hasOwn(volumes, m.sub) ? volumes[m.sub] : 1; return typeof v === 'number' && v >= 0 && v <= 1 ? v : 1; };
-const voice = new Voice(room, { getVolume: volumeOf });
+const voiceDevices = load('voiceDevices', {}); // {in, out}: chosen microphone / speaker ids
+const voice = new Voice(room, { getVolume: volumeOf, input: voiceDevices.in, output: voiceDevices.out });
+let devOpen = false; // microphone & speaker pickers showing?
+const devBox = h('div', { class: 'vdev' }); // kept across re-renders so an open picker isn't rebuilt under you
 const saveVolumes = debounce(() => save('voiceVolumes', volumes), 400);
 
 /* ---- strict validation of everything a friend sends ---- */
@@ -1288,6 +1291,7 @@ room.on('message', (msg, from) => {
 const VOICE_ERR = {
   'mic-denied': 'Microphone blocked — allow it in the address bar, then try again',
   'mic-missing': 'No microphone found',
+  'mic-switch': 'Couldn’t switch to that microphone — still using the previous one',
 };
 voice.on('error', (code, message) => toast(VOICE_ERR[code] || `Couldn’t start voice${message ? ` — ${message}` : ''}`, { timeout: 6000 }));
 voice.on('change', () => {
@@ -1626,13 +1630,39 @@ function updateFriendCard() {
 }
 
 /* ---- voice controls: in the room panel and a small call bar on screen ---- */
-function voiceButtons() {
+function voiceButtons(withDevices = false) {
   return [
     h('button', { class: `vbtn${voice.muted ? ' off' : ''}`, title: `${voice.muted ? 'Unmute' : 'Mute'} (V)`, 'aria-pressed': String(voice.muted), html: icon(voice.muted ? 'mic-off' : 'mic'), onclick: () => voice.toggleMute() }),
     h('button', { class: `vbtn${voice.deaf ? ' off' : ''}`, title: `${voice.deaf ? 'Undeafen' : 'Deafen'} (D)`, 'aria-pressed': String(voice.deaf), html: icon(voice.deaf ? 'headphone-off' : 'headphones'), onclick: () => voice.toggleDeaf() }),
+    withDevices ? h('button', { class: `vbtn${devOpen ? ' on' : ''}`, id: 'voice-devices', title: 'Microphone & speaker', 'aria-expanded': String(devOpen), html: icon('settings'), onclick: () => { devOpen = !devOpen; renderVoice(); if (devOpen) refreshDevices(); } }) : null,
     h('button', { class: 'vbtn hang', title: 'Leave voice', html: icon('phone-off'), onclick: () => voice.leave() }),
-  ];
+  ].filter(Boolean);
 }
+
+/* ---- microphone & speaker pickers (room panel, while in a call) ---- */
+function deviceSelect(label, list, current, onpick, unsupported) {
+  const s = h('select', { class: 'field', 'aria-label': label, disabled: !!unsupported },
+    h('option', { value: '', text: unsupported || 'System default' }),
+    ...(unsupported ? [] : list.map((d) => h('option', { value: d.id, text: d.label }))));
+  s.value = !unsupported && list.some((d) => d.id === current) ? current : '';
+  s.addEventListener('change', () => onpick(s.value));
+  return s;
+}
+async function refreshDevices() {
+  if (!devOpen || !voice.inCall) return;
+  const { inputs, outputs } = await voice.devices();
+  const remember = (k, id) => { voiceDevices[k] = id; save('voiceDevices', voiceDevices); };
+  const mic = deviceSelect('Microphone', inputs, voice.inputId, async (id) => {
+    if (await voice.setInput(id)) remember('in', id); else refreshDevices();
+  });
+  const spk = deviceSelect('Speaker', outputs, voice.outputId, async (id) => {
+    if (await voice.setOutput(id)) remember('out', id); else { toast('Couldn’t switch to that speaker'); refreshDevices(); }
+  }, outputSupported() ? '' : 'Set in your device’s sound settings');
+  devBox.replaceChildren(
+    h('label', {}, h('span', { title: 'Microphone', html: icon('mic') }), mic),
+    h('label', {}, h('span', { title: 'Speaker', html: icon('volume-2') }), spk));
+}
+voice.on('devices', refreshDevices); // something was plugged in or unplugged
 
 function inVoiceAvatars(size) {
   const list = [];
@@ -1642,6 +1672,7 @@ function inVoiceAvatars(size) {
 }
 
 function renderVoice() {
+  if (!voice.inCall) devOpen = false; // the pickers close when you hang up
   const inRoom = room.connected;
   const others = voice.others;
 
@@ -1653,7 +1684,8 @@ function renderVoice() {
       if (voice.inCall) {
         box.append(
           h('div', { class: 'vhead' }, h('span', { class: 'vlive' }), h('b', { text: 'Voice' }), h('span', { class: 'muted', text: others.length ? ` · ${listNames(others.map((m) => nameOf(room.members.get(m))))}` : ' · waiting for others to join' })),
-          h('div', { class: 'vrow' }, h('div', { class: 'vavs' }, ...inVoiceAvatars('sm')), h('div', { class: 'vctl' }, ...voiceButtons())),
+          h('div', { class: 'vrow' }, h('div', { class: 'vavs' }, ...inVoiceAvatars('sm')), h('div', { class: 'vctl' }, ...voiceButtons(true))),
+          devOpen ? devBox : null,
           ringable().length ? h('button', { class: 'btn small', id: 'ring-all', html: `${icon('bell-ring')}${outRing ? 'Ringing…' : ringable().length === room.friends.length ? 'Ring everyone' : 'Ring the others'}`, disabled: !!outRing, onclick: () => ringFriends() }) : null,
           h('p', { class: 'note', text: 'Tip: wear headphones so others don’t hear an echo. V mutes, D deafens.' }));
       } else {

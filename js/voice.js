@@ -13,8 +13,8 @@
  *   {t:'rtc', cid, k:'offer'|'answer', sdp}  to one person
  *   {t:'rtc', cid, k:'ice', c}             to one person
  */
-import { Emitter, netLog, pathOf } from './util.js?v=20261116h';
-import { b64u, randomBytes } from './crypto.js?v=20261116h';
+import { Emitter, netLog, pathOf } from './util.js?v=20261116i';
+import { b64u, randomBytes } from './crypto.js?v=20261116i';
 
 const MAX_SDP = 20000;
 const CONNECT_TIMEOUT_MS = 20000;
@@ -27,6 +27,8 @@ const SPEAK_HOLD_MS = 350;
 const DEFAULT_ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 export const voiceSupported = () => !!(navigator.mediaDevices?.getUserMedia && window.RTCPeerConnection);
+/** can this browser send call audio to a chosen speaker? (not Safari / most phones) */
+export const outputSupported = () => 'setSinkId' in HTMLMediaElement.prototype;
 
 /*
  * Keep voice light so the monthly relay (TURN) quota lasts: the SDP we send asks the
@@ -71,10 +73,14 @@ function cleanCandidate(c) {
  *  error (code, message)     mic-denied | mic-missing | mic-error
  */
 export class Voice extends Emitter {
-  constructor(room, { getVolume = () => 1 } = {}) {
+  constructor(room, { getVolume = () => 1, input = '', output = '' } = {}) {
     super();
     this.room = room;
     this.getVolume = getVolume;
+    this.inputId = typeof input === 'string' ? input : '';   // chosen microphone ('' = system default)
+    this.outputId = typeof output === 'string' ? output : ''; // chosen speaker ('' = system default)
+    this._inSeq = 0;
+    navigator.mediaDevices?.addEventListener?.('devicechange', () => this.emit('devices'));
     this.live = false;
     this.joining = false;
     this.muted = false;
@@ -125,10 +131,7 @@ export class Voice extends Emitter {
     // create the audio context while we still have the click's user activation (the mic prompt can outlast it)
     try { this.ctx ||= new (window.AudioContext || window.webkitAudioContext)(); this.ctx.resume?.().catch(() => {}); } catch { this.ctx = null; }
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-        video: false,
-      });
+      this.stream = await this._openMic(this.inputId, true);
     } catch (e) {
       this.joining = false;
       const code = e?.name === 'NotAllowedError' || e?.name === 'SecurityError' ? 'mic-denied' : e?.name === 'NotFoundError' ? 'mic-missing' : 'mic-error';
@@ -140,12 +143,83 @@ export class Voice extends Emitter {
     this.live = true;
     this.deaf = false;
     this._applyMute();
-    this.stream.getAudioTracks().forEach((t) => t.addEventListener('ended', () => { if (this.live) { this.leave(); this.emit('error', 'mic-error', 'Your microphone was disconnected'); } }));
+    this._watchMic(this.stream);
     this.ctx?.resume?.().catch(() => {});
     this._meter('me', this.stream);
     this._announce();
     for (const mid of this.others) this._maybeConnect(mid);
     this.emit('change');
+  }
+
+  /* ---------------- microphone & speaker choice ---------------- */
+  async _openMic(id, fallback) {
+    const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: id ? { ...base, deviceId: { exact: id } } : base, video: false });
+    } catch (e) {
+      // the remembered microphone is unplugged: use the system default instead
+      if (!id || !fallback || !['OverconstrainedError', 'NotFoundError'].includes(e?.name)) throw e;
+      return navigator.mediaDevices.getUserMedia({ audio: base, video: false });
+    }
+  }
+
+  _watchMic(stream) {
+    stream.getAudioTracks().forEach((t) => t.addEventListener('ended', () => {
+      if (this.live && this.stream === stream) { this.leave(); this.emit('error', 'mic-error', 'Your microphone was disconnected'); }
+    }));
+  }
+
+  /** microphones and speakers the browser knows about (names need mic permission) */
+  async devices() {
+    let list = [];
+    try { list = await navigator.mediaDevices.enumerateDevices(); } catch { /* none */ }
+    const pick = (kind, word) => list
+      .filter((d) => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+      .map((d, i) => ({ id: d.deviceId, label: d.label || `${word} ${i + 1}` }));
+    return { inputs: pick('audioinput', 'Microphone'), outputs: pick('audiooutput', 'Speaker') };
+  }
+
+  /** switch microphone ('' = system default); mid-call it swaps the track on every link without redialling */
+  async setInput(id) {
+    id = typeof id === 'string' ? id : '';
+    const prev = this.inputId;
+    this.inputId = id;
+    if (!this.live) return true;
+    const seq = ++this._inSeq;
+    let next;
+    try { next = await this._openMic(id, false); } catch (e) {
+      if (seq === this._inSeq) { this.inputId = prev; this.emit('error', 'mic-switch', e?.message || ''); }
+      return false;
+    }
+    if (!this.live || seq !== this._inSeq) { next.getTracks().forEach((t) => t.stop()); return false; }
+    const old = this.stream;
+    const track = next.getAudioTracks()[0];
+    this.stream = next;
+    this._applyMute();
+    this._watchMic(next);
+    await Promise.all([...this.peers.values()].flatMap((p) => p.pc.getSenders()
+      .filter((s) => s.track?.kind === 'audio').map((s) => s.replaceTrack(track).catch(() => {}))));
+    old?.getTracks().forEach((t) => t.stop());
+    this._meter('me', next);
+    this.emit('change');
+    return true;
+  }
+
+  /** switch speaker ('' = system default); false if the browser can't or the device refused */
+  async setOutput(id) {
+    if (!outputSupported()) return false;
+    const prev = this.outputId;
+    this.outputId = typeof id === 'string' ? id : '';
+    const done = await Promise.all([...this.peers.values()].filter((p) => p.audio).map((p) => this._sink(p.audio)));
+    if (done.every(Boolean)) return true;
+    this.outputId = prev; // keep everyone on the speaker that works
+    await Promise.all([...this.peers.values()].filter((p) => p.audio).map((p) => this._sink(p.audio)));
+    return false;
+  }
+
+  _sink(audio) {
+    if (!audio.setSinkId) return Promise.resolve(false);
+    return audio.setSinkId(this.outputId).then(() => true, () => false);
   }
 
   leave() {
@@ -250,6 +324,7 @@ export class Voice extends Emitter {
         link.audio = document.createElement('audio');
         link.audio.autoplay = true;
         this.sink.append(link.audio);
+        if (this.outputId) this._sink(link.audio);
       }
       link.audio.srcObject = stream;
       link.audio.muted = this.deaf;
