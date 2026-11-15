@@ -1,14 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116c';
-import { icon } from './icons.js?v=20261116c';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116c';
-import { quoteOfTheDay } from './quotes.js?v=20261116c';
-import { Timer } from './timer.js?v=20261116c';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116c';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116c';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116c';
-import { Voice, voiceSupported } from './voice.js?v=20261116c';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116c';
-import { sha256b64u } from './crypto.js?v=20261116c';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116e';
+import { icon } from './icons.js?v=20261116e';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116e';
+import { quoteOfTheDay } from './quotes.js?v=20261116e';
+import { Timer } from './timer.js?v=20261116e';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116e';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116e';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116e';
+import { Voice, voiceSupported } from './voice.js?v=20261116e';
+import { Ringtone } from './ring.js?v=20261116e';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116e';
+import { sha256b64u } from './crypto.js?v=20261116e';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -914,6 +915,170 @@ function setUrlInvite(code, secret) {
   history.replaceState(null, '', u.pathname + u.search + u.hash);
 }
 
+/* ---- desktop notifications (friend joins / starts a call while you're in another tab) ---- */
+const notifySupported = () => 'Notification' in window;
+let notifyOn = notifySupported() && load('roomNotify', false) && Notification.permission === 'granted';
+let swReg = null;
+function registerNotifySW() {
+  if (swReg || !('serviceWorker' in navigator)) return Promise.resolve(swReg);
+  return navigator.serviceWorker.register('sw.js').then((r) => (swReg = r)).catch(() => null);
+}
+if (notifyOn) registerNotifySW();
+navigator.serviceWorker?.addEventListener('message', (e) => {
+  if (e.data?.t !== 'notify-click') return;
+  if (e.data.tag === 'ring' && inRing) { if (e.data.action === 'join') answerRing(); else if (e.data.action === 'decline') declineRing(); }
+  if (openId !== 'room') openPanel('room');
+});
+async function setNotify(on) {
+  if (on) {
+    if (!notifySupported()) { toast('This browser can’t show notifications'); return false; }
+    const perm = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
+    if (perm !== 'granted') { toast('Notifications are blocked for this site — allow them in your browser’s site settings'); return false; }
+    await registerNotifySW();
+  }
+  notifyOn = on;
+  save('roomNotify', on);
+  if (on) toast('You’ll get a notification when a friend joins or starts a call');
+  return on;
+}
+async function roomNotify(title, body, tag) {
+  if (!notifyOn) return;
+  return showNote(title, { body, tag });
+}
+const pageFocused = () => document.visibilityState === 'visible' && document.hasFocus();
+/** a system notification, only when you're not looking at the page (otherwise the toast/card is enough) */
+async function showNote(title, extra) {
+  if (!notifySupported() || Notification.permission !== 'granted' || pageFocused()) return;
+  const opts = { renotify: !!extra.tag, icon: 'favicon.svg', badge: 'favicon.svg', ...extra };
+  try {
+    const reg = swReg || (await registerNotifySW()) || (await navigator.serviceWorker?.getRegistration());
+    if (reg) { await reg.showNotification(title, opts); return; }
+  } catch (e) { netLog('notification failed', e?.message || e); }
+  try {
+    delete opts.actions; // only service-worker notifications can have buttons
+    const n = new Notification(title, opts);
+    n.onclick = () => { window.focus(); n.close(); if (openId !== 'room') openPanel('room'); };
+  } catch { /* phones without a service worker: nothing we can do */ }
+}
+
+/* ---- ringing: call friends who are in the room but not in voice ---- */
+const RING_MS = 30000;
+const ringtone = new Ringtone();
+const allowRingIn = throttle(6000);
+let outRing = null; // { id, pending: Set<mid>, timer }
+let inRing = null;  // { id, mid, timer }
+
+function ringable() { return room.friends.filter((f) => !voice.remote.get(f.mid)?.on).map((f) => f.mid); }
+
+function ringFriends(mids = ringable()) {
+  if (!room.connected) { toast('Nobody else is in the room right now'); return; }
+  mids = mids.filter((m) => room.members.has(m) && !voice.remote.get(m)?.on);
+  if (!mids.length) { toast('Everyone here is already in the call'); return; }
+  endOutRing('replaced');
+  const id = uid(10);
+  outRing = { id, pending: new Set(mids), timer: setTimeout(() => endOutRing('timeout'), RING_MS) };
+  for (const m of mids) room.send({ t: 'ring', id }, m);
+  ringtone.start('out');
+  // you're ringing them into a call, so you wait in it
+  if (!voice.inCall && !voice.joining && voiceSupported()) voice.join();
+  renderRingCard();
+  renderVoice(); updateFriendCard();
+}
+
+function endOutRing(why) {
+  if (!outRing) return;
+  const r = outRing;
+  outRing = null;
+  clearTimeout(r.timer);
+  ringtone.stop();
+  if (r.pending.size && why !== 'done') for (const m of r.pending) room.send({ t: 'ring-stop', id: r.id, why: why === 'timeout' ? 'timeout' : 'cancel' }, m);
+  if (why === 'timeout' && r.pending.size) toast(`No answer from ${listNames([...r.pending].map((m) => nameOf(room.members.get(m))).filter(Boolean)) || 'your friend'}`);
+  renderRingCard();
+  renderVoice(); updateFriendCard();
+}
+
+function ringAnswered(mid, how) {
+  if (!outRing?.pending.has(mid)) return;
+  outRing.pending.delete(mid);
+  const who = nameOf(room.members.get(mid));
+  if (how === 'decline') toast(`${who} can’t talk right now`);
+  else if (how === 'join') toast(`${who} is joining 🎙️`);
+  if (!outRing.pending.size) endOutRing('done'); else renderRingCard();
+}
+
+function onRing(msg, from) {
+  if (typeof msg.id !== 'string' || msg.id.length > 16) return;
+  if (voice.inCall || voice.joining) { room.send({ t: 'ring-reply', id: msg.id, ans: 'in-call' }, from.mid); return; }
+  if (inRing && inRing.mid !== from.mid) return; // already being rung by someone else
+  if (!inRing && !allowRingIn(from.mid)) return;
+  clearTimeout(inRing?.timer);
+  inRing = { id: msg.id, mid: from.mid, timer: setTimeout(() => missedRing(), RING_MS + 2000) };
+  ringtone.start('in');
+  const who = nameOf(from);
+  showNote(`📞 ${who} is calling you`, {
+    body: 'They’re waiting for you in the study room’s voice call', tag: 'ring', requireInteraction: true,
+    actions: [{ action: 'join', title: 'Join voice' }, { action: 'decline', title: 'Not now' }],
+  });
+  renderRingCard();
+}
+
+function closeIncoming() {
+  if (!inRing) return;
+  clearTimeout(inRing.timer);
+  inRing = null;
+  ringtone.stop();
+  navigator.serviceWorker?.getRegistration()
+    .then((r) => r?.getNotifications({ tag: 'ring' }))
+    .then((ns) => ns?.forEach((n) => n.close()))
+    .catch(() => {});
+  renderRingCard();
+}
+
+function missedRing() {
+  if (!inRing) return;
+  const who = nameOf(room.members.get(inRing.mid));
+  closeIncoming();
+  addChat({ sys: `Missed call from ${who}` });
+  toast(`📞 Missed call from ${who}`, { action: { label: 'Join voice', fn: joinVoice }, timeout: 9000 });
+}
+
+function answerRing() {
+  if (!inRing) return;
+  room.send({ t: 'ring-reply', id: inRing.id, ans: 'join' }, inRing.mid);
+  closeIncoming();
+  joinVoice();
+}
+
+function declineRing() {
+  if (!inRing) return;
+  room.send({ t: 'ring-reply', id: inRing.id, ans: 'decline' }, inRing.mid);
+  closeIncoming();
+}
+
+function renderRingCard() {
+  let card = $('#ring-card');
+  if (!inRing && !outRing) { card?.remove(); return; }
+  if (!card) { card = h('div', { id: 'ring-card', role: 'alertdialog', 'aria-live': 'assertive' }); document.body.append(card); }
+  card.innerHTML = '';
+  if (inRing) {
+    const f = room.members.get(inRing.mid);
+    card.className = 'glass ring-card incoming';
+    card.append(
+      h('div', { class: 'ring-av' }, f ? avatarEl(f, 'lg') : null),
+      h('div', { class: 'ring-txt' }, h('b', { text: `${nameOf(f)} is calling you` }), h('span', { class: 'muted', text: 'They’re waiting in the voice call' })),
+      h('div', { class: 'ring-btns' },
+        h('button', { class: 'btn solid small', id: 'ring-answer', html: `${icon('phone')}Join voice`, onclick: answerRing }),
+        h('button', { class: 'btn small', id: 'ring-decline', text: 'Not now', onclick: declineRing })));
+  } else {
+    const names = listNames([...outRing.pending].map((m) => nameOf(room.members.get(m))).filter(Boolean));
+    card.className = 'glass ring-card outgoing';
+    card.append(
+      h('div', { class: 'ring-av pulse', html: icon('bell-ring') }),
+      h('div', { class: 'ring-txt' }, h('b', { text: `Ringing ${names}…` }), h('span', { class: 'muted', text: 'They’ll hear a ringtone and get a notification' })),
+      h('div', { class: 'ring-btns' }, h('button', { class: 'btn small', id: 'ring-cancel', text: 'Cancel', onclick: () => endOutRing('cancel') })));
+  }
+}
+
 /* ---- room events ---- */
 document.addEventListener('visibilitychange', () => netLog('page', document.visibilityState));
 addEventListener('online', () => netLog('network online'));
@@ -939,6 +1104,7 @@ room.on('state', (st) => {
 room.on('member', (m, first) => {
   if (first) {
     toast(`${nameOf(m)} joined · verified Google account 🔒`);
+    roomNotify(`${nameOf(m)} joined your study room`, 'Verified Google account · end-to-end encrypted', `join-${m.mid}`);
     addChat({ sys: `${m.name} joined` });
     floatEmoji('👋', 3);
   }
@@ -948,6 +1114,8 @@ room.on('member', (m, first) => {
 });
 room.on('member-left', (m, reason) => {
   statuses.delete(m.mid);
+  if (inRing?.mid === m.mid) closeIncoming();
+  if (outRing?.pending.has(m.mid)) { outRing.pending.delete(m.mid); if (!outRing.pending.size) endOutRing('done'); else renderRingCard(); }
   if (!room.members.size) negotiated = false;
   // we left, the room stopped, or we removed them ourselves: nothing to announce
   if (['left-room', 'stopped', 'denied', 'replaced'].includes(reason)) { renderRoom(); updateChip(); return; }
@@ -1043,7 +1211,12 @@ room.on('message', (msg, from) => {
     }
     case 'voice': {
       const before = voice.remote.get(from.mid)?.on === true;
+      const callWasEmpty = voice.others.length === 0 && !voice.inCall;
       voice.handle(msg, from);
+      if (msg.on === true) ringAnswered(from.mid, 'joined');
+      if (msg.on === true && !before && !voice.inCall && !voice.joining) {
+        roomNotify(callWasEmpty ? `🎙️ ${who} started a call` : `🎙️ ${who} joined the call`, 'Open the study room to join voice', `voice-${from.mid}`);
+      }
       if (msg.on === true && !before && !voice.inCall && !voice.joining && allowVoiceToast(from.mid)) {
         toast(`🎙️ ${who} joined voice`, { action: { label: 'Join', fn: joinVoice }, timeout: 7000 });
       }
@@ -1051,6 +1224,15 @@ room.on('message', (msg, from) => {
     }
     case 'rtc':
       voice.handle(msg, from);
+      break;
+    case 'ring':
+      onRing(msg, from);
+      break;
+    case 'ring-stop':
+      if (inRing && inRing.mid === from.mid && inRing.id === msg.id) { if (msg.why === 'timeout') missedRing(); else closeIncoming(); }
+      break;
+    case 'ring-reply':
+      if (outRing && outRing.id === msg.id && ['join', 'decline', 'in-call'].includes(msg.ans)) ringAnswered(from.mid, msg.ans);
       break;
   }
 });
@@ -1061,7 +1243,11 @@ const VOICE_ERR = {
   'mic-missing': 'No microphone found',
 };
 voice.on('error', (code, message) => toast(VOICE_ERR[code] || `Couldn’t start voice${message ? ` — ${message}` : ''}`, { timeout: 6000 }));
-voice.on('change', () => { renderVoice(); updateFriendCard(); });
+voice.on('change', () => {
+  if (outRing && !voice.inCall && !voice.joining) endOutRing('cancel'); // hung up while ringing
+  if (inRing && (voice.inCall || voice.joining)) closeIncoming();       // joined some other way
+  renderVoice(); updateFriendCard();
+});
 voice.on('speaking', (key, on) => {
   $$(`[data-voice="${key === 'me' ? 'me' : CSS.escape(key)}"]`).forEach((el) => el.classList.toggle('speaking', on));
 });
@@ -1154,6 +1340,13 @@ function buildRoomPanel() {
     h('div', { id: 'lock-state', class: 'note' }),
     h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
     h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', text: 'Start, pause and skip together' })), syncTog),
+    notifySupported() ? h('div', { class: 'set-row', id: 'notify-row' },
+      h('label', {}, 'Notify me', h('span', { class: 'sub', text: 'When a friend joins or starts a call while you’re in another tab' })),
+      toggleEl(notifyOn, async function onNotify(on) {
+        const got = await setNotify(on);
+        const input = $('#notify-row input');
+        if (input) input.checked = got;
+      })) : null,
     h('div', { class: 'reacts', id: 'reacts' }, ...REACTS.map((e) => h('button', {
       text: e, title: `Send ${e}`, onclick: () => {
         if (room.send({ t: 'react', emoji: e })) floatEmoji(e, 2); else toast('Nobody else is connected right now');
@@ -1349,7 +1542,9 @@ function updateFriendCard() {
           h('div', { class: 'name' }, h('span', { class: 'nm' }), h('span', { class: 'verified', title: 'Verified Google account', html: icon('circle-check') }), h('span', { class: 'vslot' })),
           h('div', { class: 'email' }), h('div', { class: 'what' }), h('div', { class: 'task-line' }),
           h('div', { class: 'vol', hidden: true }, h('span', { html: icon('volume-2') }), h('input', { type: 'range', min: 0, max: 1, step: 0.05, title: 'Their volume (only for you)' }))),
-        h('div', { class: 'ftime' })));
+        h('div', { class: 'fside' },
+          h('div', { class: 'ftime' }),
+          h('button', { class: 'icon-btn ring-btn', title: `Ring ${nameOf(f)} (plays a ringtone on their side)`, 'aria-label': `Ring ${nameOf(f)}`, html: icon('bell-ring'), onclick: () => ringFriends([f.mid]) }))));
       const range = $('.vol input', slot.lastChild);
       range.value = volumeOf(f.mid);
       rangeFill(range);
@@ -1377,6 +1572,9 @@ function updateFriendCard() {
     if (b) vs.append(b);
     if (voice.inCall && voice.remote.get(f.mid)?.on && voice.linkState(f.mid) !== 'connected') vs.append(h('span', { class: 'vlink', text: { failed: 'audio failed', reconnecting: 'reconnecting audio…' }[voice.linkState(f.mid)] || 'connecting audio…' }));
     $('.vol', el).hidden = !(voice.inCall && voice.remote.get(f.mid)?.on);
+    const rb = $('.ring-btn', el);
+    rb.hidden = !!voice.remote.get(f.mid)?.on;
+    rb.classList.toggle('active', !!outRing?.pending.has(f.mid));
   }
 }
 
@@ -1409,13 +1607,16 @@ function renderVoice() {
         box.append(
           h('div', { class: 'vhead' }, h('span', { class: 'vlive' }), h('b', { text: 'Voice' }), h('span', { class: 'muted', text: others.length ? ` · ${listNames(others.map((m) => nameOf(room.members.get(m))))}` : ' · waiting for others to join' })),
           h('div', { class: 'vrow' }, h('div', { class: 'vavs' }, ...inVoiceAvatars('sm')), h('div', { class: 'vctl' }, ...voiceButtons())),
+          ringable().length ? h('button', { class: 'btn small', id: 'ring-all', html: `${icon('bell-ring')}${outRing ? 'Ringing…' : ringable().length === room.friends.length ? 'Ring everyone' : 'Ring the others'}`, disabled: !!outRing, onclick: () => ringFriends() }) : null,
           h('p', { class: 'note', text: 'Tip: wear headphones so others don’t hear an echo. V mutes, D deafens.' }));
       } else {
         box.append(
           h('div', { class: 'vrow' },
             h('div', {}, h('b', { text: others.length ? `${others.length} in voice` : 'Voice call' }),
               h('div', { class: 'muted', text: others.length ? listNames(others.map((m) => nameOf(room.members.get(m)))) : 'Talk while you study — browser to browser, encrypted' })),
-            h('button', { class: 'btn solid small', html: `${icon('phone')}${voice.joining ? 'Joining…' : 'Join voice'}`, disabled: voice.joining || !voiceSupported(), onclick: joinVoice })));
+            h('div', { class: 'row' },
+              h('button', { class: 'btn small', id: 'ring-all', title: 'Join voice and ring everyone who isn’t in it', html: `${icon('bell-ring')}Ring`, disabled: voice.joining || !voiceSupported(), onclick: () => ringFriends() }),
+              h('button', { class: 'btn solid small', html: `${icon('phone')}${voice.joining ? 'Joining…' : 'Join voice'}`, disabled: voice.joining || !voiceSupported(), onclick: joinVoice }))));
       }
     }
   }
@@ -1523,7 +1724,7 @@ function openPanel(id) {
 $$('#dock [data-panel]').forEach((b) => b.addEventListener('click', () => openPanel(b.dataset.panel)));
 document.addEventListener('pointerdown', (e) => {
   if (!openId) return;
-  if (e.target.closest('.panel, #dock, #toasts, #friend-chip, #call-bar, #focus-task, .mode-switch')) return;
+  if (e.target.closest('.panel, #dock, #toasts, #ring-card, #friend-chip, #call-bar, #focus-task, .mode-switch')) return;
   openPanel(null);
 });
 

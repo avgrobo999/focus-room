@@ -481,3 +481,22 @@ body.idle .call-bar { opacity: .55; }
 /* small text-style button (troubleshooting) */
 .linkish { display: block; margin: 10px auto 0; padding: 4px 8px; background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; opacity: .8; }
 .linkish:hover, .linkish:focus-visible { opacity: 1; color: var(--text, inherit); }
+
+/* ringing */
+.ring-card {
+  position: fixed; z-index: 10; top: calc(72px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px)); display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 14px 16px; border-radius: 18px; animation: toastIn .25s ease;
+}
+.ring-card .ring-txt { flex: 1; min-width: 150px; display: flex; flex-direction: column; gap: 2px; }
+.ring-card .ring-txt .muted { font-size: 13px; color: var(--muted); }
+.ring-card .ring-btns { display: flex; gap: 8px; margin-left: auto; }
+.ring-av { position: relative; flex: none; display: grid; place-items: center; }
+.ring-card.incoming .ring-av::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid var(--accent, #7cf); animation: ringPulse 1.2s ease-out infinite; }
+.ring-av.pulse { width: 46px; height: 46px; border-radius: 50%; background: var(--hover); animation: ringShake 1.2s ease-in-out infinite; }
+.ring-av.pulse .ic { width: 22px; height: 22px; }
+@keyframes ringPulse { from { opacity: .9; transform: scale(.9); } to { opacity: 0; transform: scale(1.35); } }
+@keyframes ringShake { 0%, 40%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(-12deg); } 20% { transform: rotate(12deg); } }
+.friend-card .fside { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 4px; }
+.ring-btn.active { color: var(--fg); background: var(--hover); animation: ringShake 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ring-av.pulse, .ring-btn.active, .ring-card.incoming .ring-av::after { animation: none; } }
