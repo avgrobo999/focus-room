@@ -1,4 +1,4 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261116b';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116b';
 import { icon } from './icons.js?v=20261116b';
 import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116b';
 import { quoteOfTheDay } from './quotes.js?v=20261116b';
@@ -915,6 +915,10 @@ function setUrlInvite(code, secret) {
 }
 
 /* ---- room events ---- */
+document.addEventListener('visibilitychange', () => netLog('page', document.visibilityState));
+addEventListener('online', () => netLog('network online'));
+addEventListener('offline', () => netLog('network offline'));
+navigator.connection?.addEventListener?.('change', () => netLog('network changed', navigator.connection.type || '', navigator.connection.effectiveType || ''));
 let stateSince = Date.now();
 function updateRoomHint() {
   const el = $('#room-hint');
@@ -1170,6 +1174,18 @@ function buildRoomPanel() {
       }),
       h('button', { class: 'btn small danger', html: `${icon('log-out')}Leave room`, onclick: leaveRoom })),
     h('div', { class: 'row between', id: 'me-line', style: { marginTop: '12px', fontSize: '13px', color: 'var(--muted)' } }),
+    h('button', {
+      class: 'linkish', id: 'copy-netlog', text: 'Copy connection log', title: 'For troubleshooting calls — contains no names, emails or keys',
+      onclick: async () => {
+        const c = navigator.connection;
+        const head = `focusroom ${document.querySelector('script[src*="app.js"]')?.src.split('v=')[1] || ''} · ${room.state} · role ${room.role || '-'} · ${room.members.size + 1} here · voice ${voice.inCall ? 'on' : 'off'}`
+          + `${c ? ` · net ${c.type || ''} ${c.effectiveType || ''}` : ''} · ${navigator.userAgent}`;
+        const text = `${head}
+${netLogText()}`;
+        try { await navigator.clipboard.writeText(text); toast('Connection log copied — paste it to whoever is helping you'); }
+        catch { prompt('Copy this log:', text); }
+      },
+    }),
   );
 
   const stopped = h('div', { id: 'room-stopped', hidden: true },
@@ -1359,7 +1375,7 @@ function updateFriendCard() {
     vs.innerHTML = '';
     const b = voiceBadge(f.mid);
     if (b) vs.append(b);
-    if (voice.inCall && voice.remote.get(f.mid)?.on && voice.linkState(f.mid) !== 'connected') vs.append(h('span', { class: 'vlink', text: voice.linkState(f.mid) === 'failed' ? 'audio failed' : 'connecting audio…' }));
+    if (voice.inCall && voice.remote.get(f.mid)?.on && voice.linkState(f.mid) !== 'connected') vs.append(h('span', { class: 'vlink', text: { failed: 'audio failed', reconnecting: 'reconnecting audio…' }[voice.linkState(f.mid)] || 'connecting audio…' }));
     $('.vol', el).hidden = !(voice.inCall && voice.remote.get(f.mid)?.on);
   }
 }
@@ -1600,5 +1616,5 @@ addEventListener('hashchange', () => {
 
 // debugging handle (local development only)
 if (['localhost', '127.0.0.1'].includes(location.hostname)) {
-  window.focusroom = { timer, room, sound, S, get syncOn() { return syncOn; }, voice, statuses, get myToken() { return myToken; }, DEFAULT_SETTINGS };
+  window.focusroom = { timer, room, sound, S, get syncOn() { return syncOn; }, voice, statuses, netLogText, get myToken() { return myToken; }, DEFAULT_SETTINGS };
 }

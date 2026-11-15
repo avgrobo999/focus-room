@@ -477,3 +477,7 @@ body.idle .call-bar { opacity: .55; }
 @media (min-width: 761px) and (max-width: 1180px) {
   .call-bar { left: 26px; transform: none; top: calc(max(20px, env(safe-area-inset-top)) + 86px); }
 }
+
+/* small text-style button (troubleshooting) */
+.linkish { display: block; margin: 10px auto 0; padding: 4px 8px; background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; opacity: .8; }
+.linkish:hover, .linkish:focus-visible { opacity: 1; color: var(--text, inherit); }

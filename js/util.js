@@ -80,3 +80,25 @@ export class Emitter {
   off(ev, fn) { this._h[ev] = (this._h[ev] || []).filter((f) => f !== fn); }
   emit(ev, ...a) { (this._h[ev] || []).forEach((f) => { try { f(...a); } catch (e) { console.error(e); } }); }
 }
+
+/* ---- connection log (for "Copy connection log": no names, emails or keys) ---- */
+const NET_LOG = [];
+export function netLog(...parts) {
+  NET_LOG.push(`${new Date().toISOString().slice(11, 19)} ${parts.filter((p) => p !== '' && p != null).join(' ')}`);
+  if (NET_LOG.length > 400) NET_LOG.shift();
+}
+export const netLogText = () => NET_LOG.join('\n');
+
+/** how an RTCPeerConnection is actually connected, e.g. "srflx/udp → relay/udp" */
+export async function pathOf(pc) {
+  try {
+    const stats = await pc.getStats();
+    let pair = null;
+    stats.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+    if (!pair) stats.forEach((r) => { if (!pair && r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r; });
+    if (!pair) return '?';
+    const l = stats.get(pair.localCandidateId), r = stats.get(pair.remoteCandidateId);
+    const rtt = pair.currentRoundTripTime != null ? ` rtt=${Math.round(pair.currentRoundTripTime * 1000)}ms` : '';
+    return `${l?.candidateType}/${l?.protocol}${l?.relayProtocol ? `(${l.relayProtocol})` : ''} → ${r?.candidateType}/${r?.protocol}${rtt}`;
+  } catch { return '?'; }
+}

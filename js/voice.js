@@ -13,11 +13,14 @@
  *   {t:'rtc', cid, k:'offer'|'answer', sdp}  to one person
  *   {t:'rtc', cid, k:'ice', c}             to one person
  */
-import { Emitter } from './util.js?v=20261116b';
+import { Emitter, netLog, pathOf } from './util.js?v=20261116b';
 import { b64u, randomBytes } from './crypto.js?v=20261116b';
 
 const MAX_SDP = 20000;
 const CONNECT_TIMEOUT_MS = 20000;
+const BLIP_GRACE_MS = 4000;     // a link that was up and goes "disconnected" gets this long to come back by itself
+const RESTART_CHECK_MS = 10000; // then an ICE restart (same call, new network path) gets this long
+const MAX_RESTARTS = 3;         // …before we hang up that link and dial again from scratch
 const ORPHAN_GRACE_MS = 20000; // keep audio up while the room re-forms after its anchor drops
 const SPEAK_LEVEL = 0.018;
 const SPEAK_HOLD_MS = 350;
@@ -82,7 +85,9 @@ export class Voice extends Emitter {
     const p = this.peers.get(mid);
     if (!p) return this.live && this.remote.get(mid)?.on ? 'connecting' : 'none';
     const s = p.pc.connectionState || p.pc.iceConnectionState;
-    return s === 'connected' || s === 'completed' ? 'connected' : s === 'failed' ? 'failed' : 'connecting';
+    if (s === 'connected' || s === 'completed') return 'connected';
+    if (p.everUp) return 'reconnecting';
+    return s === 'failed' ? 'failed' : 'connecting';
   }
 
   /* ---------------- joining & leaving ---------------- */
@@ -206,7 +211,7 @@ export class Voice extends Emitter {
     this._drop(mid);
     const cfg = { ...(this.room.iceConfig || DEFAULT_ICE) };
     const pc = new RTCPeerConnection(cfg);
-    const link = { mid, cid, pc, iceQueue: [], audio: null, orphanT: null, timeoutT: null, retries: 0 };
+    const link = { mid, cid, pc, iceQueue: [], audio: null, orphanT: null, timeoutT: null, retries: 0, everUp: false, restarts: 0, blipT: null, restartT: null, seen: '' };
     this.peers.set(mid, link);
     this.stream.getAudioTracks().forEach((t) => pc.addTrack(t, this.stream));
     pc.onicecandidate = (e) => {
@@ -228,9 +233,19 @@ export class Voice extends Emitter {
     };
     const onState = () => {
       if (this.peers.get(mid) !== link) return;
-      const st = this.linkState(mid);
-      if (st === 'connected') { clearTimeout(link.timeoutT); link.retries = 0; }
-      if (st === 'failed' && this._isOfferer(mid)) this._redial(mid, link);
+      const ice = pc.iceConnectionState, conn = pc.connectionState || '';
+      if (link.seen !== `${ice}/${conn}`) { link.seen = `${ice}/${conn}`; netLog('voice', mid.slice(0, 4), ice, conn); }
+      const up = ice === 'connected' || ice === 'completed' || conn === 'connected';
+      if (up) {
+        clearTimeout(link.timeoutT); clearTimeout(link.blipT); clearTimeout(link.restartT);
+        link.blipT = link.restartT = null;
+        if (!link.everUp || link.restarts) setTimeout(() => pathOf(pc).then((p) => netLog('voice path', mid.slice(0, 4), p)), 800);
+        link.everUp = true; link.retries = 0; link.restarts = 0;
+      } else if (link.everUp) {
+        // a call that was working: ride out short blips, then restart ICE on the same call (no hang-up)
+        if (ice === 'failed' || conn === 'failed') this._recover(mid, link);
+        else if (!link.blipT && !link.restartT) link.blipT = setTimeout(() => { link.blipT = null; if (this.peers.get(mid) === link && this.linkState(mid) !== 'connected') this._recover(mid, link); }, BLIP_GRACE_MS);
+      } else if ((ice === 'failed' || conn === 'failed') && this._isOfferer(mid)) this._redial(mid, link);
       this.emit('change');
     };
     pc.onconnectionstatechange = onState;
@@ -243,6 +258,7 @@ export class Voice extends Emitter {
 
   _redial(mid, link) {
     const tries = link.retries + 1;
+    netLog('voice', mid.slice(0, 4), 'redial', `#${tries}`);
     this._drop(mid);
     if (tries > 4) { this.emit('change'); return; }
     setTimeout(() => {
@@ -250,6 +266,28 @@ export class Voice extends Emitter {
       const l = this._offer(mid);
       if (l) l.retries = tries;
     }, 1500 * tries);
+  }
+
+  /** the network path broke mid-call: find a new one without tearing the call down */
+  _recover(mid, link) {
+    if (this.peers.get(mid) !== link || !this.live) return;
+    clearTimeout(link.restartT);
+    // keep checking from both sides: if the other person's restart never reaches us, we still notice
+    link.restartT = setTimeout(() => {
+      link.restartT = null;
+      if (this.peers.get(mid) !== link) return;
+      if (this.linkState(mid) === 'connected') link.restarts = 0; // came back (perhaps without ever looking down)
+      else this._recover(mid, link);
+    }, RESTART_CHECK_MS);
+    if (!this._isOfferer(mid)) return; // only the offerer renegotiates, so the two sides never collide
+    if (++link.restarts > MAX_RESTARTS) { netLog('voice', mid.slice(0, 4), 'restarts exhausted — redialling'); this._redial(mid, link); return; }
+    netLog('voice', mid.slice(0, 4), 'ice restart', `#${link.restarts}`);
+    (async () => {
+      const offer = await link.pc.createOffer({ iceRestart: true });
+      if (this.peers.get(mid) !== link) return;
+      await link.pc.setLocalDescription(offer);
+      if (this.peers.get(mid) === link) this.room.send({ t: 'rtc', cid: link.cid, k: 'offer', sdp: link.pc.localDescription.sdp }, mid);
+    })().catch((e) => { console.warn('[voice] restart', e); this._redial(mid, link); });
   }
 
   _offer(mid) {
@@ -273,6 +311,7 @@ export class Voice extends Emitter {
     if (msg.k === 'offer') {
       if (this._isOfferer(mid) || typeof msg.sdp !== 'string' || msg.sdp.length > MAX_SDP) return;
       if (!link || link.cid !== msg.cid) link = this._newLink(mid, msg.cid); // a new call attempt replaces the old one
+      else if (link.pc.signalingState !== 'stable') return; // (can't happen with one offerer, but don't wedge if it does)
       await link.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
       await this._flushIce(link);
       const answer = await link.pc.createAnswer();
@@ -305,6 +344,8 @@ export class Voice extends Emitter {
     this.peers.delete(mid);
     clearTimeout(p.orphanT);
     clearTimeout(p.timeoutT);
+    clearTimeout(p.blipT);
+    clearTimeout(p.restartT);
     try { p.pc.close(); } catch { /* noop */ }
     if (p.audio) { p.audio.srcObject = null; p.audio.remove(); }
     this._unmeter(mid);

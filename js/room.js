@@ -17,7 +17,7 @@
  * in the room, and forwards messages between them (re-encrypted per link).
  * If the anchor leaves, the others reconnect and one of them takes over.
  */
-import { Emitter, uid } from './util.js?v=20261116b';
+import { Emitter, uid, netLog, pathOf } from './util.js?v=20261116b';
 import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116b';
 
 const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
@@ -161,6 +161,7 @@ export class Room extends Emitter {
     if (this.state === s && detail === undefined) return;
     this.state = s;
     this.stateDetail = detail;
+    netLog('room', s, detail || '');
     this.emit('state', s, detail);
   }
 
@@ -240,6 +241,7 @@ export class Room extends Emitter {
     });
     p.on('connection', (conn) => this._incoming(conn));
     p.on('disconnected', () => {
+      netLog('broker disconnected');
       if (this.peer === p && this.want && !p.destroyed) this._later(() => { try { p.reconnect(); } catch { /* noop */ } }, 1500);
     });
     p.on('error', (err) => {
@@ -262,6 +264,7 @@ export class Room extends Emitter {
           // the room is there but we can't reach it — usually the network blocks direct links
           this.linkFails = (this.linkFails || 0) + 1;
           this.emit('linkfail', this.linkFails);
+          netLog('room', 'found the room but the direct link never opened', `#${this.linkFails}`);
           this.sessions.delete(sess);
           try { conn.close(); } catch { /* noop */ }
           this._retry(1500);
@@ -276,6 +279,7 @@ export class Room extends Emitter {
   }
 
   _peerError(err) {
+    netLog('broker error', err.type);
     console.warn('[room]', err.type, err.message);
     const fatal = ['browser-incompatible', 'ssl-unavailable', 'invalid-id', 'invalid-key'];
     if (fatal.includes(err.type)) { this.want = false; this._setState('error', err.message); return; }
@@ -507,6 +511,8 @@ export class Room extends Emitter {
     sess.live = true;
     this.fullTries = 0;
     this.linkFails = 0;
+    const pc = sess.conn.peerConnection;
+    if (pc) setTimeout(() => pathOf(pc).then((p) => netLog('room link up', sess.role === 'host' ? 'guest' : 'anchor', (sess.mid || '').slice(0, 4), p)), 500);
     if (sess.role === 'guest') this.hostMid = sess.mid;
     this._setState('connected');
     this._addMember(this._member(sess));
@@ -580,6 +586,7 @@ export class Room extends Emitter {
 
   _lost(sess, reason) {
     if (!this.sessions.has(sess)) return;
+    netLog('room link lost', `(${sess.role === 'host' ? 'to a guest' : 'to anchor'})`, reason, sess.mid ? sess.mid.slice(0, 4) : '', sess.live ? '' : 'before-ready');
     this.sessions.delete(sess);
     try { sess.conn.close(); } catch { /* noop */ }
     if (!this.want) return;
