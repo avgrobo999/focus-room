@@ -418,3 +418,4 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 #lock-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.note.hint { background: rgba(255, 210, 122, .1); border: 1px solid rgba(255, 210, 122, .3); border-radius: 12px; padding: 9px 11px; color: #ffe2a8; }

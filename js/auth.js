@@ -8,10 +8,10 @@
  * ID), expiry, verified email, and a nonce bound to this specific room, so a
  * token can't be reused anywhere else.
  */
-import { b64u, unb64u, utf8 } from './crypto.js';
+import { b64u, unb64u, utf8 } from './crypto.js?v=20261115';
 
 // Public OAuth Web client ID (not a secret). Paste yours here.
-export const GOOGLE_CLIENT_ID = '';
+export const GOOGLE_CLIENT_ID = '851506894285-25uvrujj9rt65nuilm5sh22do5aqqiqe.apps.googleusercontent.com';
 
 const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
 // Local automated tests only: a fake issuer + keys served by the test server.

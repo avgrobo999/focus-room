@@ -15,8 +15,8 @@
  * Whoever arrives first anchors the room; the other connects to them. A third
  * connection is refused while two people are connected.
  */
-import { Emitter, uid } from './util.js';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes } from './crypto.js';
+import { Emitter, uid } from './util.js?v=20261115';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes } from './crypto.js?v=20261115';
 
 const ID_PREFIX = 'focusroom-v2-';
 const HEARTBEAT_MS = 4000;

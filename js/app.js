@@ -1,13 +1,13 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js';
-import { icon } from './icons.js';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js';
-import { quoteOfTheDay } from './quotes.js';
-import { Timer } from './timer.js';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js';
-import { Room, newRoom, parseInvite, roomSupported } from './room.js';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js';
-import { sha256b64u } from './crypto.js';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261115';
+import { icon } from './icons.js?v=20261115';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261115';
+import { quoteOfTheDay } from './quotes.js?v=20261115';
+import { Timer } from './timer.js?v=20261115';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261115';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261115';
+import { Room, newRoom, parseInvite, roomSupported } from './room.js?v=20261115';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261115';
+import { sha256b64u } from './crypto.js?v=20261115';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -877,7 +877,13 @@ function setUrlInvite(code, secret) {
 }
 
 /* ---- room events ---- */
+let stateSince = Date.now();
+function updateRoomHint() {
+  const el = $('#room-hint');
+  if (el) el.hidden = !(['connecting', 'reconnecting', 'verifying'].includes(room.state) && Date.now() - stateSince > 15000);
+}
 room.on('state', (st) => {
+  stateSince = Date.now();
   if (st !== 'connected') negotiated = false;
   renderRoom(); updateChip();
 });
@@ -1049,6 +1055,7 @@ function buildRoomPanel() {
       h('button', { class: 'btn small', html: `${icon('copy')}Copy invite`, id: 'room-copy', onclick: copyInvite })),
     h('div', { class: 'e2e-line', html: `${icon('check')}<span>End-to-end encrypted · only people with this exact link and a Google sign-in can join</span>` }),
     h('div', { class: 'room-status', id: 'room-status' }, h('i', { class: 'pulse' }), h('span', { id: 'room-status-text' })),
+    h('p', { class: 'note hint', id: 'room-hint', hidden: true, text: 'Taking a while? A VPN (including Opera’s built-in one), an ad-blocker’s “WebRTC protection”, or a strict network can block rooms. Turn those off for this site, or try Edge or Chrome.' }),
     h('div', { id: 'room-reauth', hidden: true },
       h('p', { class: 'note', text: 'Your Google sign-in expired. Sign in again to reconnect:' }),
       h('div', { class: 'gsi-slot', id: 'room-reauth-btn' })),
@@ -1351,7 +1358,7 @@ function loop() {
   if (sec !== lastSec) {
     lastSec = sec;
     renderClock();
-    if (room.state !== 'idle') { updateChip(); updateFriendCard(); }
+    if (room.state !== 'idle') { updateChip(); updateFriendCard(); updateRoomHint(); }
   }
 }
 function renderTitleOnly() {
