@@ -13,8 +13,8 @@
  *   {t:'rtc', cid, k:'offer'|'answer', sdp}  to one person
  *   {t:'rtc', cid, k:'ice', c}             to one person
  */
-import { Emitter, netLog, pathOf } from './util.js?v=20261116f';
-import { b64u, randomBytes } from './crypto.js?v=20261116f';
+import { Emitter, netLog, pathOf } from './util.js?v=20261116g';
+import { b64u, randomBytes } from './crypto.js?v=20261116g';
 
 const MAX_SDP = 20000;
 const CONNECT_TIMEOUT_MS = 20000;
@@ -27,6 +27,32 @@ const SPEAK_HOLD_MS = 350;
 const DEFAULT_ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
 export const voiceSupported = () => !!(navigator.mediaDevices?.getUserMedia && window.RTCPeerConnection);
+
+/*
+ * Keep voice light so the monthly relay (TURN) quota lasts: the SDP we send asks the
+ * other side to encode Opus at ~24 kbps (still clear for speech; browsers default to
+ * ~32–40) with DTX, which sends almost nothing while you're silent. Both sides do this,
+ * so both directions are capped.
+ */
+const OPUS_MAX_BITRATE = 24000;
+function tuneOpus(sdp) {
+  const lines = sdp.split('\r\n');
+  const pts = lines.map((l) => l.match(/^a=rtpmap:(\d+) opus\/48000/i)?.[1]).filter(Boolean);
+  for (const pt of pts) {
+    const want = { maxaveragebitrate: String(OPUS_MAX_BITRATE), usedtx: '1' };
+    const i = lines.findIndex((l) => l.startsWith(`a=fmtp:${pt} `));
+    if (i < 0) {
+      const r = lines.findIndex((l) => l.startsWith(`a=rtpmap:${pt} `));
+      lines.splice(r + 1, 0, `a=fmtp:${pt} ${Object.entries(want).map(([k, v]) => `${k}=${v}`).join(';')}`);
+      continue;
+    }
+    const params = lines[i].slice(`a=fmtp:${pt} `.length).split(';').map((s) => s.trim()).filter(Boolean)
+      .filter((s) => !Object.hasOwn(want, s.split('=')[0].toLowerCase()));
+    Object.entries(want).forEach(([k, v]) => params.push(`${k}=${v}`));
+    lines[i] = `a=fmtp:${pt} ${params.join(';')}`;
+  }
+  return lines.join('\r\n');
+}
 
 function cleanCandidate(c) {
   if (!c || typeof c !== 'object' || typeof c.candidate !== 'string' || c.candidate.length > 1000) return null;
@@ -286,7 +312,7 @@ export class Voice extends Emitter {
       const offer = await link.pc.createOffer({ iceRestart: true });
       if (this.peers.get(mid) !== link) return;
       await link.pc.setLocalDescription(offer);
-      if (this.peers.get(mid) === link) this.room.send({ t: 'rtc', cid: link.cid, k: 'offer', sdp: link.pc.localDescription.sdp }, mid);
+      if (this.peers.get(mid) === link) this.room.send({ t: 'rtc', cid: link.cid, k: 'offer', sdp: tuneOpus(link.pc.localDescription.sdp) }, mid);
     })().catch((e) => { console.warn('[voice] restart', e); this._redial(mid, link); });
   }
 
@@ -296,7 +322,7 @@ export class Voice extends Emitter {
       const offer = await link.pc.createOffer();
       await link.pc.setLocalDescription(offer);
       if (this.peers.get(mid) !== link) return;
-      this.room.send({ t: 'rtc', cid: link.cid, k: 'offer', sdp: link.pc.localDescription.sdp }, mid);
+      this.room.send({ t: 'rtc', cid: link.cid, k: 'offer', sdp: tuneOpus(link.pc.localDescription.sdp) }, mid);
     })().catch((e) => { console.warn('[voice] offer', e); this._drop(mid); });
     this.emit('change');
     return link;
@@ -316,7 +342,7 @@ export class Voice extends Emitter {
       await this._flushIce(link);
       const answer = await link.pc.createAnswer();
       await link.pc.setLocalDescription(answer);
-      if (this.peers.get(mid) === link) this.room.send({ t: 'rtc', cid: link.cid, k: 'answer', sdp: link.pc.localDescription.sdp }, mid);
+      if (this.peers.get(mid) === link) this.room.send({ t: 'rtc', cid: link.cid, k: 'answer', sdp: tuneOpus(link.pc.localDescription.sdp) }, mid);
       this.emit('change');
       return;
     }

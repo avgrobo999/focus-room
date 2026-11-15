@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116f';
-import { icon } from './icons.js?v=20261116f';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116f';
-import { quoteOfTheDay } from './quotes.js?v=20261116f';
-import { Timer } from './timer.js?v=20261116f';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116f';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116f';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116f';
-import { Voice, voiceSupported } from './voice.js?v=20261116f';
-import { Ringtone } from './ring.js?v=20261116f';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116f';
-import { sha256b64u } from './crypto.js?v=20261116f';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116g';
+import { icon } from './icons.js?v=20261116g';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116g';
+import { quoteOfTheDay } from './quotes.js?v=20261116g';
+import { Timer } from './timer.js?v=20261116g';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116g';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116g';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116g';
+import { Voice, voiceSupported } from './voice.js?v=20261116g';
+import { Ringtone } from './ring.js?v=20261116g';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116g';
+import { sha256b64u } from './crypto.js?v=20261116g';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
