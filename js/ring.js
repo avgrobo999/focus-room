@@ -9,10 +9,29 @@ export class Ringtone {
   _ctx() {
     try {
       this.ctx ||= new (window.AudioContext || window.webkitAudioContext)();
-      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+      if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
     } catch { this.ctx = null; }
     return this.ctx;
   }
+
+  /**
+   * Phones only let a page make sound if its audio was started from a tap. A ring arrives with no tap,
+   * so call this on every tap: it creates/resumes the audio and plays a silent blip to fully unlock it
+   * (iOS), so the ringtone can play later on its own.
+   */
+  unlock() {
+    const ctx = this._ctx();
+    if (!ctx || this._unlocked === ctx.state + ctx.currentTime) return;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = ctx.createBuffer(1, 1, 22050);
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch { /* noop */ }
+    this._unlocked = ctx.state + ctx.currentTime;
+  }
+
+  get ringing() { return this.kind; }
 
   /** kind: 'in' (someone is ringing you) | 'out' (you're ringing someone) */
   start(kind) {

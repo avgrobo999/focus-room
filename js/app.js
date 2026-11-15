@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116e';
-import { icon } from './icons.js?v=20261116e';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116e';
-import { quoteOfTheDay } from './quotes.js?v=20261116e';
-import { Timer } from './timer.js?v=20261116e';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116e';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116e';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116e';
-import { Voice, voiceSupported } from './voice.js?v=20261116e';
-import { Ringtone } from './ring.js?v=20261116e';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116e';
-import { sha256b64u } from './crypto.js?v=20261116e';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116f';
+import { icon } from './icons.js?v=20261116f';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116f';
+import { quoteOfTheDay } from './quotes.js?v=20261116f';
+import { Timer } from './timer.js?v=20261116f';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116f';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116f';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116f';
+import { Voice, voiceSupported } from './voice.js?v=20261116f';
+import { Ringtone } from './ring.js?v=20261116f';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116f';
+import { sha256b64u } from './crypto.js?v=20261116f';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -1015,8 +1015,10 @@ function onRing(msg, from) {
   inRing = { id: msg.id, mid: from.mid, timer: setTimeout(() => missedRing(), RING_MS + 2000) };
   ringtone.start('in');
   const who = nameOf(from);
+  // in a background tab the phone won't play our ringtone, so the notification itself buzzes and beeps
   showNote(`📞 ${who} is calling you`, {
     body: 'They’re waiting for you in the study room’s voice call', tag: 'ring', requireInteraction: true,
+    silent: false, vibrate: [400, 200, 400, 200, 400, 200, 400],
     actions: [{ action: 'join', title: 'Join voice' }, { action: 'decline', title: 'Not now' }],
   });
   renderRingCard();
@@ -1080,7 +1082,13 @@ function renderRingCard() {
 }
 
 /* ---- room events ---- */
-document.addEventListener('visibilitychange', () => netLog('page', document.visibilityState));
+document.addEventListener('visibilitychange', () => {
+  netLog('page', document.visibilityState);
+  // the phone paused our audio while the tab was hidden: start the ring again now you can hear it
+  if (document.visibilityState === 'visible' && ringtone.ringing) ringtone.start(ringtone.ringing);
+});
+// keep the ringtone's audio unlocked so a ring can make sound without a tap (phones)
+for (const ev of ['pointerdown', 'touchend', 'keydown']) addEventListener(ev, () => ringtone.unlock(), { capture: true, passive: true });
 addEventListener('online', () => netLog('network online'));
 addEventListener('offline', () => netLog('network offline'));
 navigator.connection?.addEventListener?.('change', () => netLog('network changed', navigator.connection.type || '', navigator.connection.effectiveType || ''));
@@ -1341,7 +1349,7 @@ function buildRoomPanel() {
     h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
     h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', text: 'Start, pause and skip together' })), syncTog),
     notifySupported() ? h('div', { class: 'set-row', id: 'notify-row' },
-      h('label', {}, 'Notify me', h('span', { class: 'sub', text: 'When a friend joins or starts a call while you’re in another tab' })),
+      h('label', {}, 'Notify me', h('span', { class: 'sub', text: 'When a friend joins, starts a call or rings you while this tab is in the background' })),
       toggleEl(notifyOn, async function onNotify(on) {
         const got = await setNotify(on);
         const input = $('#notify-row input');
@@ -1817,5 +1825,5 @@ addEventListener('hashchange', () => {
 
 // debugging handle (local development only)
 if (['localhost', '127.0.0.1'].includes(location.hostname)) {
-  window.focusroom = { timer, room, sound, S, get syncOn() { return syncOn; }, voice, statuses, netLogText, get myToken() { return myToken; }, DEFAULT_SETTINGS };
+  window.focusroom = { timer, room, sound, ringtone, S, get syncOn() { return syncOn; }, voice, statuses, netLogText, get myToken() { return myToken; }, DEFAULT_SETTINGS };
 }
