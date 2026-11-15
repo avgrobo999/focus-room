@@ -1,6 +1,6 @@
 # focusroom
 
-A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient sounds and animated scenes, plus a **private study room for you and one friend**.
+A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient sounds and animated scenes, plus a **private study room with voice chat for you and up to three friends**.
 
 **Live:** https://avgrobo999.github.io/focus-room/
 
@@ -13,25 +13,28 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link
 - **Themes:** 8 animated canvas scenes, photo backgrounds, or upload your own
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions
-- **Study room (2 people):**
+- **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
+  - **Voice call:** join or leave voice, mute (`V`), deafen (`D`), see who's talking, and set each person's volume. Audio goes browser to browser and is never recorded
   - Timers can be synced: start, pause and skip together
-  - See what your friend is working on and how long they have left
-  - Chat, emoji reactions and theme sharing
-  - Either person can drop out and rejoin. A third visitor sees "room full"
+  - See what everyone is working on and how long they have left
+  - Group chat, emoji reactions and theme sharing
+  - Anyone can drop out and rejoin. If the person hosting the room leaves, someone else takes over automatically. A fifth visitor sees "room full"
 
 ## How the room is secured
 
-- **Sign in with Google (rooms only).** Both people sign in with [Google Identity Services](https://developers.google.com/identity/gsi/web). Each browser checks the *other* person's ID token itself: Google's RS256 signature, issuer, audience (this app's client ID), expiry, verified email, and a nonce tied to this one room, so a token can't be reused in any other room or app. You can also **lock a room** to one Google account, with one click once your friend has joined.
-- **End-to-end encryption.** The invite link looks like `…/focus-room/#r=<code>.<secret>`. The 128-bit secret lives in the URL fragment, which browsers never send to a server. Every message is sealed with AES-256-GCM using a key derived from it with HKDF. A challenge/response handshake proves the other side holds the key, and sequence numbers block replays. That keeps GitHub, the PeerJS broker and any relay out: they can't read or forge room traffic.
+- **Sign in with Google (rooms only).** Everyone signs in with [Google Identity Services](https://developers.google.com/identity/gsi/web). Each browser checks the ID tokens of the people it connects to itself: Google's RS256 signature, issuer, audience (this app's client ID), expiry, verified email, and a nonce tied to this one room, so a token can't be reused in any other room or app. You can also **lock a room** to up to five Google accounts, with one click once your friends have joined.
 - **Unguessable meeting point.** The room's address on the broker is a hash of the code *and* the secret, so someone who only sees the room code (say, in a screenshot) can't find, join or jam the room.
-- **No server of our own.** The public [PeerJS](https://peerjs.com) broker only introduces the two browsers. After that, traffic flows directly over WebRTC. Nothing is stored server-side.
+- **End-to-end encryption.** The invite link looks like `…/focus-room/#r=<code>.<secret>`. The 128-bit secret lives in the URL fragment, which browsers never send to a server. Every message is sealed with AES-256-GCM using a key derived from it with HKDF. A challenge/response handshake proves the other side holds the key, and sequence numbers block replays. That keeps GitHub, the PeerJS broker and any relay out: they can't read or forge room traffic.
+- **No server of our own.** The public [PeerJS](https://peerjs.com) broker only introduces the browsers. After that, traffic flows directly over WebRTC. Nothing is stored server-side.
+- **How a group room works.** The first person in holds the room (the "anchor"). Everyone else connects to the anchor, which checks each newcomer's invite key and Google sign-in, and passes encrypted messages along. You verify the anchor yourself; the other members are vouched for by the anchor. If the anchor leaves, the remaining people pick a new one and verify each other again.
+- **Voice calls.** Each pair of people in the call gets a direct, DTLS-SRTP-encrypted WebRTC audio link (a small mesh, which suits four people). The call setup (SDP offers and network candidates) is sent only over the end-to-end encrypted room channel. The PeerJS broker never sees it, and nobody can slip into the call without the room key. Turning your mic on needs your browser's permission. Muting disables your microphone track, so nothing is sent while you're muted.
 - **Hardening:**
   - Strict Content-Security-Policy, and the app refuses to run inside a frame.
   - Strict validation and rate-limiting of everything a friend sends.
   - Focus stats only credit time that really passed on your own device.
   - Test hooks only work on `localhost`.
-- **Still true:** a direct peer-to-peer connection lets each browser learn the other's IP address. Only share invites with people you trust.
+- **Still true:** direct peer-to-peer connections let the browsers in a room learn each other's IP addresses (everyone's, once you're in a voice call together). Only share invites with people you trust. Wear headphones in calls to avoid echo.
 
 ### Setup: Google client ID
 
@@ -43,7 +46,7 @@ Create an OAuth **Web application** client in Google Cloud. Its "Authorized Java
 python3 -m http.server 8080   # then open http://localhost:8080
 ```
 
-Keyboard shortcuts: `Space` start/pause · `R` reset · `N` skip · `1 2 3` modes · `T` tasks · `S` sounds · `M` music · `B` themes · `G` room · `F` full screen.
+Keyboard shortcuts: `Space` start/pause · `R` reset · `N` skip · `1 2 3` modes · `T` tasks · `S` sounds · `M` music · `B` themes · `G` room · `V` mute · `D` deafen (in a call) · `F` full screen.
 
 ## Credits
 

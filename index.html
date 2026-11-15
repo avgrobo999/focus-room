@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>focusroom</title>
-  <meta name="description" content="A calm, aesthetic focus dashboard: Pomodoro timer, tasks, ambient sounds and animated scenes, with a private study room for you and one friend.">
+  <meta name="description" content="A calm, aesthetic focus dashboard: Pomodoro timer, tasks, ambient sounds and animated scenes, with a private study room and voice call for you and up to three friends.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self' data: https:; font-src 'self'; connect-src 'self' https://0.peerjs.com wss://0.peerjs.com https://www.googleapis.com https://accounts.google.com/gsi/; frame-src https://www.youtube-nocookie.com https://open.spotify.com https://accounts.google.com/gsi/; media-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="theme-color" content="#1c1433">
   <meta property="og:title" content="focusroom — study together">
-  <meta property="og:description" content="Aesthetic focus timer with ambient sounds, scenes, tasks and a shared room for you and a friend.">
+  <meta property="og:description" content="Aesthetic focus timer with ambient sounds, scenes, tasks and a shared room and voice call for you and your friends.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="fonts/fonts.css">
-  <link rel="stylesheet" href="css/style.css?v=20261115b">
+  <link rel="stylesheet" href="css/style.css?v=20261116">
 </head>
 <body class="mode-home">
   <div id="bg" aria-hidden="true">
@@ -24,6 +24,7 @@
   <header id="top">
     <div class="brand"><span class="brand-mark"></span><span class="brand-name">focusroom</span></div>
     <button id="friend-chip" class="glass chip" hidden></button>
+    <div id="call-bar" class="glass call-bar" role="group" aria-label="Voice call" hidden></div>
     <div id="top-right">
       <blockquote id="quote" class="quote" title="Click for another quote">
         <p id="quote-text"></p>
@@ -77,7 +78,7 @@
       <button data-panel="tasks" data-icon="list-todo" title="Tasks (T)"></button>
       <button data-panel="stats" data-icon="chart-column" title="Focus stats"></button>
       <button data-panel="themes" data-icon="image" title="Themes (B)"></button>
-      <button data-panel="room" data-icon="users" title="Study with a friend (G)" class="room-btn"><i id="room-dot" class="dot-ind" hidden></i></button>
+      <button data-panel="room" data-icon="users" title="Study room (G)" class="room-btn"><i id="room-dot" class="dot-ind" hidden></i></button>
       <span class="sep"></span>
       <button data-panel="settings" data-icon="settings" title="Settings"></button>
       <button id="fullscreen-btn" data-icon="maximize" title="Full screen (F)"></button>
@@ -102,6 +103,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="js/app.js?v=20261115b"></script>
+  <script type="module" src="js/app.js?v=20261116"></script>
 </body>
 </html>

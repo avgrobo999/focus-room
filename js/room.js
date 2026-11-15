@@ -1,28 +1,32 @@
 /**
- * Two-person study room over WebRTC (PeerJS), end-to-end encrypted and
- * signed in with Google.
+ * Study room for up to four people over WebRTC (PeerJS), end-to-end encrypted
+ * and signed in with Google.
  *
  *  1. The invite link carries a room code (?) and a 128-bit secret in the
  *     #fragment. The code picks the meeting point on the PeerJS broker; the
- *     secret never leaves the two browsers.
+ *     secret never leaves the browsers in the room.
  *  2. Every message is an AES-GCM envelope keyed from the secret. A
  *     challenge/response handshake proves the other side holds the key and
  *     is live (not a replay). Sequence numbers block replays inside a session.
- *  3. Both sides then swap Google ID tokens and verify each other's token in
- *     the browser (see auth.js). Only after both checks pass do timer, status
- *     and chat messages flow.
+ *  3. Both sides of every connection swap Google ID tokens and verify each
+ *     other's token in the browser (see auth.js). Only after both checks pass
+ *     do timer, status, chat and call messages flow.
  *
- * Whoever arrives first anchors the room; the other connects to them. A third
- * connection is refused while two people are connected.
+ * Whoever arrives first anchors the room and the others connect to them (a
+ * star). The anchor verifies each person directly, tells everyone who else is
+ * in the room, and forwards messages between them (re-encrypted per link).
+ * If the anchor leaves, the others reconnect and one of them takes over.
  */
-import { Emitter, uid } from './util.js?v=20261115b';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261115b';
+import { Emitter, uid } from './util.js?v=20261116';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116';
 
 const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
+export const MAX_PEOPLE = 4;
 const HEARTBEAT_MS = 4000;
 const DEAD_AFTER_MS = 15000;
 const HANDSHAKE_MS = 20000;
 const MAX_ENVELOPE = 120000; // chars of ciphertext
+const MID_RE = /^[A-Za-z0-9_-]{8,24}$/;
 const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
 
 export const newRoom = () => ({ code: uid(10), secret: b64u(randomBytes(16)) });
@@ -50,15 +54,46 @@ function peerOptions() {
 
 export const roomSupported = () => typeof window.Peer === 'function' && 'RTCPeerConnection' in window && !!window.crypto?.subtle;
 
+const cleanText = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const PICTURE_RE = /^https:\/\/[a-z0-9.-]+\.googleusercontent\.com\//i;
+
+/** claims about a third person, as reported by the room's anchor */
+function cleanClaims(c) {
+  if (!c || typeof c !== 'object' || typeof c.sub !== 'string' || !c.sub || c.sub.length > 64) return null;
+  const email = cleanText(c.email, 120);
+  const picture = cleanText(c.picture, 600);
+  return {
+    sub: c.sub, email,
+    name: cleanText(c.name, 60) || email || 'Friend',
+    givenName: cleanText(c.givenName, 40) || cleanText(c.name, 40) || 'Friend',
+    picture: PICTURE_RE.test(picture) ? picture : '',
+  };
+}
+
+function memberId(code) {
+  // stable across reloads of this tab, so a refresh replaces our old link instead of filling a seat
+  const k = `focusroom:mid:${code}`;
+  try {
+    const v = sessionStorage.getItem(k);
+    if (v && MID_RE.test(v)) return v;
+  } catch { /* private mode */ }
+  const v = b64u(randomBytes(9));
+  try { sessionStorage.setItem(k, v); } catch { /* private mode */ }
+  return v;
+}
+
 /**
  * events:
  *  state (state, detail)   idle | connecting | waiting | verifying | connected | reconnecting
  *                          | full | denied | badkey | error
- *  friend (friend, first)  verified friend {sub, email, name, givenName, picture}
- *  friend-left (reason)
+ *  member (m, first)       someone is in the room: {mid, sub, email, name, givenName, picture}
+ *  member-left (m, reason) they left / dropped ('left' | 'lost' | 'timeout' | …)
  *  need-token ()           our Google token expired mid-session; call setToken()
  *  rejected (reason)       we refused someone (wrong key / failed sign-in check)
- *  message (msg)           app-level message (only after both sides are verified)
+ *  message (msg, from)     app-level message from member `from` (only after verification)
+ *
+ * Members connected to the anchor are verified by our own browser. Members
+ * reached through the anchor were verified by the anchor (who we verified).
  */
 export class Room extends Emitter {
   constructor({ verifyPeer, getToken }) {
@@ -70,19 +105,26 @@ export class Room extends Emitter {
     this.secret = '';
     this.key = null;
     this.role = null;
+    this.mid = '';
+    this.hostMid = '';
     this.peer = null;
-    this.sess = null;
-    this.friend = null;
+    this.sessions = new Set();
+    this.members = new Map(); // mid -> member
+    this.seen = new Set();    // Google subs seen in this room (for "joined" vs "back")
     this.rtt = 120;
     this.want = false;
     this.fullTries = 0;
+    this._hb = null;
     this._timers = new Set();
-    addEventListener('pagehide', () => this._sendNow({ t: 'bye' }));
+    addEventListener('pagehide', () => this._sendAll({ t: 'bye' }));
   }
 
-  get connected() { return this.state === 'connected' && !!this.sess?.conn?.open; }
+  get connected() { return this.state === 'connected' && this.members.size > 0; }
   get latency() { return Math.min(1500, this.rtt / 2); }
-  get conn() { return this.sess?.conn || null; }
+  get friends() { return [...this.members.values()]; }
+  get friend() { return this.friends[0] || null; }
+  /** ICE servers PeerJS uses (STUN + TURN), for the voice call's own connections */
+  get iceConfig() { return this.peer?.options?.config || null; }
 
   _setState(s, detail) {
     if (this.state === s && detail === undefined) return;
@@ -97,7 +139,9 @@ export class Room extends Emitter {
     return t;
   }
 
-  _clearTimers() { this._timers.forEach(clearTimeout); this._timers.clear(); clearInterval(this._hb); }
+  _clearTimers() { this._timers.forEach(clearTimeout); this._timers.clear(); clearInterval(this._hb); this._hb = null; }
+
+  _live() { return [...this.sessions].filter((s) => s.live); }
 
   async join(code, secret) {
     if (!roomSupported()) { this._setState('error', 'This browser doesn’t support encrypted rooms.'); return; }
@@ -106,8 +150,9 @@ export class Room extends Emitter {
     this.secret = secret;
     this.key = await deriveRoomKey(secret, code);
     this.peerId = ID_PREFIX + (await sha256hex(`focusroom-v3-id|${code}|${secret}`)).slice(0, 40);
+    this.mid = memberId(code);
     this.want = true;
-    this.friend = null;
+    this.seen.clear();
     this.fullTries = 0;
     this._setState('connecting');
     this._claim();
@@ -115,20 +160,31 @@ export class Room extends Emitter {
 
   leave(silent = false) {
     this.want = false;
-    this._sendNow({ t: 'bye' });
+    this._sendAll({ t: 'bye' });
     this._clearTimers();
-    const s = this.sess;
-    this.sess = null;
-    try { s?.conn.close(); } catch { /* noop */ }
+    this._closeAll();
     this._destroyPeer();
     this.role = null;
+    this._dropMembers('left-room');
     if (!silent) {
-      this.friend = null;
       this.code = '';
       this.secret = '';
       this.key = null;
       this._setState('idle');
     }
+  }
+
+  _closeAll() {
+    const all = [...this.sessions];
+    this.sessions.clear();
+    all.forEach((s) => { try { s.conn.close(); } catch { /* noop */ } });
+  }
+
+  _dropMembers(reason) {
+    const gone = [...this.members.values()];
+    this.members.clear();
+    this.hostMid = '';
+    gone.forEach((m) => this.emit('member-left', m, reason));
   }
 
   _destroyPeer() {
@@ -147,7 +203,8 @@ export class Room extends Emitter {
     p.on('open', () => {
       if (this.peer !== p) return;
       this.role = 'host';
-      if (!this.sess) this._setState('waiting');
+      this.hostMid = this.mid;
+      if (!this._live().length) this._setState('waiting');
     });
     p.on('connection', (conn) => this._incoming(conn));
     p.on('disconnected', () => {
@@ -161,14 +218,15 @@ export class Room extends Emitter {
 
   _connectAsGuest() {
     if (!this.want) return;
+    this.role = null;
     const p = new window.Peer(peerOptions());
     this.peer = p;
     p.on('open', () => {
       if (this.peer !== p) return;
       const conn = p.connect(this.peerId, { reliable: true, serialization: 'json' });
-      this._bind(conn, 'guest');
+      const sess = this._bind(conn, 'guest');
       this._later(() => {
-        if (this.sess?.conn === conn && !conn.open) { try { conn.close(); } catch { /* noop */ } this.sess = null; this._retry(1500); }
+        if (this.sessions.has(sess) && !conn.open) { this.sessions.delete(sess); try { conn.close(); } catch { /* noop */ } this._retry(1500); }
       }, 12000);
     });
     p.on('error', (err) => {
@@ -182,59 +240,74 @@ export class Room extends Emitter {
     console.warn('[room]', err.type, err.message);
     const fatal = ['browser-incompatible', 'ssl-unavailable', 'invalid-id', 'invalid-key'];
     if (fatal.includes(err.type)) { this.want = false; this._setState('error', err.message); return; }
-    if (this.sess?.conn?.open) return; // broker hiccup while already connected directly
-    this._setState(this.friend ? 'reconnecting' : 'connecting', navigator.onLine ? 'Trying again…' : 'You’re offline');
+    if (this._live().some((s) => s.conn.open)) return; // broker hiccup while already connected directly
+    this._setState(this.seen.size ? 'reconnecting' : 'connecting', navigator.onLine ? 'Trying again…' : 'You’re offline');
     this._retry(4000);
   }
 
   _retry(ms) {
     if (!this.want) return;
+    this._closeAll();
     this._destroyPeer();
     this._later(() => this._claim(), ms);
   }
 
   _incoming(conn) {
-    // keep a connected friend, or one who has already proven they hold the key
-    if (this.connected || (this.sess?.keyOk && this.sess.conn.open)) {
-      // two people already here — refuse politely (plaintext: the newcomer may not have the key)
+    if (this.role !== 'host') { try { conn.close(); } catch { /* noop */ } return; }
+    if (this.sessions.size >= MAX_PEOPLE - 1) {
+      // a seat held by a link that has gone quiet (e.g. someone reloading) is freed for the newcomer;
+      // a live link that has already proven it holds the key is never displaced
+      const stale = [...this.sessions].find((s) => Date.now() - s.lastSeen > HEARTBEAT_MS * 2 && !(s.keyOk && s.conn.open && Date.now() - s.lastSeen < DEAD_AFTER_MS));
+      if (stale) this._lost(stale, 'timeout');
+    }
+    if (this.sessions.size >= MAX_PEOPLE - 1) {
+      // room is full — refuse politely (plaintext: the newcomer may not have the key)
       conn.on('open', () => { try { conn.send({ t: 'full' }); } catch { /* noop */ } setTimeout(() => conn.close(), 800); });
       return;
     }
-    if (this.sess) { const old = this.sess; this.sess = null; try { old.conn.close(); } catch { /* noop */ } }
     this._bind(conn, 'host');
   }
 
   /* ---------- per-connection secure session ---------- */
   _bind(conn, role) {
     const sess = {
-      conn, role,
+      conn, role,                       // role = OUR role on this link
       me: b64u(randomBytes(12)),        // our session id (in envelope + AAD)
       challenge: b64u(randomBytes(16)), // they must echo this back to prove liveness
       out: 0, peer: null, inSeq: -1,
-      keyOk: false, authed: false, ready: false, sentAuth: false, claims: null,
+      keyOk: false, authed: false, ready: false, sentAuth: false, live: false, claims: null, mid: '',
       tx: Promise.resolve(), rx: Promise.resolve(),
-      bucket: { tokens: 60, at: Date.now() },
+      // the anchor forwards everyone's traffic, so its link gets a bigger allowance
+      bucket: role === 'guest' ? { tokens: 240, max: 240, rate: 100, at: Date.now() } : { tokens: 120, max: 120, rate: 40, at: Date.now() },
+      lastSeen: Date.now(),
     };
-    this.sess = sess;
+    this.sessions.add(sess);
     conn.on('open', () => {
-      if (this.sess !== sess) return;
-      this.role = role;
-      this.lastSeen = Date.now();
-      this._setState('verifying');
+      if (!this.sessions.has(sess)) return;
+      if (role === 'guest') this.role = 'guest';
+      sess.lastSeen = Date.now();
+      if (!this.connected) this._setState('verifying');
       this._send(sess, { t: 'hello', challenge: sess.challenge });
-      clearInterval(this._hb);
-      this._hb = setInterval(() => {
-        if (this.sess !== sess) return;
-        if (Date.now() - this.lastSeen > DEAD_AFTER_MS) this._lost(sess, 'timeout');
-        else if (sess.keyOk) this._send(sess, { t: 'ping', ts: Date.now() });
-      }, HEARTBEAT_MS);
+      this._startHeartbeat();
       this._later(() => {
-        if (this.sess === sess && this.state !== 'connected') this._lost(sess, 'handshake');
+        if (this.sessions.has(sess) && !sess.live) this._lost(sess, 'handshake');
       }, HANDSHAKE_MS);
     });
     conn.on('data', (raw) => { sess.rx = sess.rx.then(() => this._data(sess, raw)).catch((e) => console.warn('[room] rx', e)); });
     conn.on('close', () => this._lost(sess, 'closed'));
     conn.on('error', () => this._lost(sess, 'error'));
+    return sess;
+  }
+
+  _startHeartbeat() {
+    if (this._hb) return;
+    this._hb = setInterval(() => {
+      const now = Date.now();
+      for (const s of [...this.sessions]) {
+        if (now - s.lastSeen > DEAD_AFTER_MS) this._lost(s, 'timeout');
+        else if (s.keyOk) this._send(s, { t: 'ping', ts: now });
+      }
+    }, HEARTBEAT_MS);
   }
 
   _aad(sender, n) { return `${this.code}|${sender}|${n}`; }
@@ -250,13 +323,12 @@ export class Room extends Emitter {
     return true;
   }
 
-  _sendNow(obj) { if (this.sess?.keyOk) this._send(this.sess, obj); }
+  _sendAll(obj) { this.sessions.forEach((s) => { if (s.keyOk) this._send(s, obj); }); }
 
   _allow(sess) {
-    // token bucket: ~25 msgs/s sustained, bursts of 60
     const b = sess.bucket;
     const now = Date.now();
-    b.tokens = Math.min(60, b.tokens + ((now - b.at) / 1000) * 25);
+    b.tokens = Math.min(b.max, b.tokens + ((now - b.at) / 1000) * b.rate);
     b.at = now;
     if (b.tokens < 1) return false;
     b.tokens -= 1;
@@ -264,7 +336,7 @@ export class Room extends Emitter {
   }
 
   async _data(sess, raw) {
-    if (this.sess !== sess || !raw || typeof raw !== 'object') return;
+    if (!this.sessions.has(sess) || !raw || typeof raw !== 'object') return;
     // The only plaintext we ever act on: "room full", and only before the secure handshake.
     if (raw.t === 'full' && !sess.keyOk && sess.role === 'guest') { this._full(); return; }
     if (raw.t === 'nokey' && !sess.keyOk) { // only a joiner gives up; the room's anchor just drops that visitor
@@ -285,10 +357,10 @@ export class Room extends Emitter {
       }
       return;
     }
-    if (this.sess !== sess || !msg || typeof msg !== 'object') return;
+    if (!this.sessions.has(sess) || !msg || typeof msg !== 'object') return;
     if (!sess.peer) { if (msg.t !== 'hello') return; sess.peer = raw.s; }
     sess.inSeq = raw.n;
-    this.lastSeen = Date.now();
+    sess.lastSeen = Date.now();
 
     switch (msg.t) {
       case 'hello':
@@ -299,10 +371,13 @@ export class Room extends Emitter {
         return;
       case 'auth': {
         if (sess.authed) return;
+        let claims;
         try {
-          sess.claims = await this.verifyPeer(msg.token);
+          if (typeof msg.mid !== 'string') throw Object.assign(new Error('old-version'), { code: 'old-version' });
+          if (!MID_RE.test(msg.mid) || msg.mid === this.mid) throw Object.assign(new Error('malformed'), { code: 'malformed' });
+          claims = await this.verifyPeer(msg.token);
         } catch (e) {
-          if (this.sess !== sess) return;
+          if (!this.sessions.has(sess)) return;
           const code = e.code || 'auth';
           this._send(sess, { t: 'denied', reason: code });
           this.emit('rejected', code);
@@ -312,13 +387,21 @@ export class Room extends Emitter {
           } else this._later(() => this._lost(sess, 'denied'), 600);
           return;
         }
-        if (this.sess !== sess) return;
+        if (!this.sessions.has(sess)) return;
+        // same tab reconnecting (e.g. after a reload): its new link replaces the old one
+        const dup = [...this.sessions].find((s) => s !== sess && s.mid === msg.mid);
+        if (dup) {
+          if (dup.claims?.sub !== claims.sub) { this._send(sess, { t: 'denied', reason: 'duplicate' }); this._later(() => this._lost(sess, 'denied'), 600); return; }
+          this._lost(dup, 'replaced');
+        }
+        sess.claims = claims;
+        sess.mid = msg.mid;
         sess.authed = true;
         this._send(sess, { t: 'ready' });
-        this._maybeConnected(sess);
+        this._maybeLive(sess);
         return;
       }
-      case 'ready': sess.ready = true; this._maybeConnected(sess); return;
+      case 'ready': sess.ready = true; this._maybeLive(sess); return;
       case 'denied': {
         const reason = typeof msg.reason === 'string' ? msg.reason.slice(0, 40) : 'auth';
         if (reason === 'expired') { this.emit('need-token'); return; } // re-sign-in, then setToken() resends
@@ -333,8 +416,9 @@ export class Room extends Emitter {
         return;
       }
       case 'bye': this._lost(sess, 'left'); return;
+      case 'roster': if (sess.live && sess.role === 'guest') this._roster(msg); return;
+      case 'app': if (sess.live) this._app(sess, msg); return;
       default:
-        if (this.state === 'connected') this.emit('message', msg);
     }
   }
 
@@ -343,47 +427,109 @@ export class Room extends Emitter {
     if (!token) { sess.awaitingToken = true; this.emit('need-token'); return; }
     sess.sentAuth = true;
     sess.awaitingToken = false;
-    this._send(sess, { t: 'auth', token });
+    this._send(sess, { t: 'auth', token, mid: this.mid });
   }
 
   /** provide a fresh Google token (after need-token) */
   setToken() {
-    const s = this.sess;
-    if (s?.keyOk && (s.awaitingToken || !s.ready)) { s.sentAuth = false; this._sendAuth(s); }
+    this.sessions.forEach((s) => { if (s.keyOk && (s.awaitingToken || !s.ready)) { s.sentAuth = false; this._sendAuth(s); } });
   }
 
-  /** remove the current friend (e.g. after locking the room to someone else) */
-  kick(reason = 'not-allowed') {
-    const s = this.sess;
-    if (!s) return;
-    this._send(s, { t: 'denied', reason });
-    if (s.role === 'guest') this._later(() => this._stop(s, 'denied', `peer-${reason}`), 600);
-    else this._later(() => this._lost(s, 'denied'), 600);
+  /** remove someone (e.g. after locking the room). Without `mid`, everyone we're directly linked to. */
+  kick(reason = 'not-allowed', mid) {
+    for (const s of [...this.sessions]) {
+      if (mid && s.mid !== mid) continue;
+      this._send(s, { t: 'denied', reason });
+      if (s.role === 'guest') this._later(() => this._stop(s, 'denied', `peer-${reason}`), 600);
+      else this._later(() => this._lost(s, 'denied'), 600);
+    }
   }
 
   _stop(sess, state, detail) {
     this.want = false;
     this._clearTimers();
-    if (this.sess === sess) this.sess = null;
-    try { sess.conn.close(); } catch { /* noop */ }
+    this._closeAll();
     this._destroyPeer();
+    this._dropMembers('stopped');
     this._setState(state, detail);
   }
 
-  _maybeConnected(sess) {
-    if (!(sess.keyOk && sess.authed && sess.ready) || this.state === 'connected') return;
-    const c = sess.claims;
-    const first = !this.friend || this.friend.sub !== c.sub;
-    this.friend = { ...c };
+  _member(sess) { return { mid: sess.mid, ...sess.claims }; }
+
+  _addMember(m) {
+    const first = !this.seen.has(m.sub);
+    this.seen.add(m.sub);
+    this.members.set(m.mid, m);
+    this.emit('member', m, first);
+  }
+
+  _maybeLive(sess) {
+    if (!(sess.keyOk && sess.authed && sess.ready) || sess.live) return;
+    sess.live = true;
     this.fullTries = 0;
+    if (sess.role === 'guest') this.hostMid = sess.mid;
     this._setState('connected');
-    this.emit('friend', this.friend, first);
+    this._addMember(this._member(sess));
+    if (this.role === 'host') this._broadcastRoster();
+  }
+
+  /** anchor → each person: everyone else in the room (except the anchor itself, whom they verified directly) */
+  _broadcastRoster(left) {
+    const live = this._live();
+    for (const s of live) {
+      const members = live.filter((o) => o !== s).map((o) => this._member(o));
+      this._send(s, left ? { t: 'roster', members, left } : { t: 'roster', members });
+    }
+  }
+
+  _roster(msg) {
+    if (!Array.isArray(msg.members)) return;
+    const next = new Map();
+    for (const raw of msg.members.slice(0, MAX_PEOPLE)) {
+      const c = cleanClaims(raw);
+      if (!c || typeof raw.mid !== 'string' || !MID_RE.test(raw.mid) || raw.mid === this.mid || raw.mid === this.hostMid) continue;
+      next.set(raw.mid, { mid: raw.mid, ...c });
+    }
+    const leftMid = typeof msg.left?.mid === 'string' ? msg.left.mid : '';
+    const leftReason = typeof msg.left?.reason === 'string' ? msg.left.reason.slice(0, 20) : 'left';
+    for (const [mid, m] of [...this.members]) {
+      if (mid === this.hostMid || next.has(mid)) continue;
+      this.members.delete(mid);
+      this.emit('member-left', m, mid === leftMid ? leftReason : 'left');
+    }
+    for (const [mid, m] of next) {
+      if (this.members.has(mid)) this.members.set(mid, m);
+      else this._addMember(m);
+    }
+  }
+
+  _app(sess, msg) {
+    const m = msg.m;
+    if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.t !== 'string') return;
+    const to = typeof msg.to === 'string' ? msg.to : '';
+    if (sess.role === 'host') {
+      // from a person linked to us; deliver locally and/or forward to the others
+      const from = this.members.get(sess.mid);
+      if (!from) return;
+      if (!to || to === this.mid) this.emit('message', m, from);
+      if (to === this.mid) return;
+      for (const o of this._live()) {
+        if (o === sess || (to && o.mid !== to)) continue;
+        this._send(o, to ? { t: 'app', from: sess.mid, to, m } : { t: 'app', from: sess.mid, m });
+      }
+      return;
+    }
+    // from the anchor: either theirs or forwarded from someone they verified
+    if (to && to !== this.mid) return;
+    const fromMid = typeof msg.from === 'string' ? msg.from : '';
+    const from = this.members.get(fromMid);
+    if (from) this.emit('message', m, from);
   }
 
   _full() {
-    // the other person may just be reconnecting from a stale connection: retry a few times first
+    // someone may just be reconnecting from a stale connection: retry a few times first
     this._clearTimers();
-    this.sess = null;
+    this._closeAll();
     this._destroyPeer();
     if (++this.fullTries <= 6) { this._setState('connecting', 'Room is busy — retrying…'); this._later(() => this._claim(), 5000); return; }
     this.want = false;
@@ -393,15 +539,45 @@ export class Room extends Emitter {
   _badKey(sess) { this._stop(sess, 'badkey'); }
 
   _lost(sess, reason) {
-    if (sess !== this.sess) return;
-    this.sess = null;
-    clearInterval(this._hb);
+    if (!this.sessions.has(sess)) return;
+    this.sessions.delete(sess);
     try { sess.conn.close(); } catch { /* noop */ }
     if (!this.want) return;
-    if (sess.authed) this.emit('friend-left', reason);
-    if (this.role === 'host' && this.peer && !this.peer.destroyed) this._setState('waiting');
-    else { this._setState('reconnecting'); this._retry(reason === 'left' ? 400 : 1200); }
+    if (sess.role === 'host') {
+      // one person dropped; the room stays open for everyone else
+      if (sess.live && this.members.has(sess.mid)) {
+        const m = this.members.get(sess.mid);
+        this.members.delete(sess.mid);
+        this.emit('member-left', m, reason);
+        this._broadcastRoster({ mid: sess.mid, reason: reason === 'left' ? 'left' : 'lost' });
+      }
+      if (!this._live().length) {
+        if (this.peer && !this.peer.destroyed) this._setState('waiting');
+        else { this._setState('reconnecting'); this._retry(1200); }
+      }
+      return;
+    }
+    // we lost the anchor: everyone else was reached through them
+    const anchor = this.hostMid;
+    const gone = [...this.members.values()];
+    this.members.clear();
+    this.hostMid = '';
+    gone.forEach((m) => this.emit('member-left', m, m.mid === anchor ? reason : 'lost'));
+    this._setState('reconnecting');
+    // a little jitter so the people left behind don't all race to become the new anchor at once
+    this._retry((reason === 'left' ? 300 : 1200) + Math.random() * 700);
   }
 
-  send(msg) { return this.connected ? this._send(this.sess, msg) : false; }
+  /** send to everyone in the room, or to one member id */
+  send(msg, to) {
+    if (!this.connected) return false;
+    if (this.role === 'host') {
+      const targets = this._live().filter((s) => !to || s.mid === to);
+      targets.forEach((s) => this._send(s, to ? { t: 'app', from: this.mid, to, m: msg } : { t: 'app', from: this.mid, m: msg }));
+      return targets.length > 0;
+    }
+    const anchor = this._live().find((s) => s.role === 'guest');
+    if (!anchor) return false;
+    return this._send(anchor, to ? { t: 'app', to, m: msg } : { t: 'app', m: msg });
+  }
 }
