@@ -22,8 +22,9 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 
 ## How the room is secured
 
-- **Sign in with Google (rooms only).** Both people sign in with [Google Identity Services](https://developers.google.com/identity/gsi/web). Each browser checks the *other* person's ID token itself: Google's RS256 signature, issuer, audience (this app's client ID), expiry, verified email, and a nonce tied to this one room, so a token can't be reused in any other room or app. You can also **lock a room** to one Google account.
+- **Sign in with Google (rooms only).** Both people sign in with [Google Identity Services](https://developers.google.com/identity/gsi/web). Each browser checks the *other* person's ID token itself: Google's RS256 signature, issuer, audience (this app's client ID), expiry, verified email, and a nonce tied to this one room, so a token can't be reused in any other room or app. You can also **lock a room** to one Google account, with one click once your friend has joined.
 - **End-to-end encryption.** The invite link looks like `…/focus-room/#r=<code>.<secret>`. The 128-bit secret lives in the URL fragment, which browsers never send to a server. Every message is sealed with AES-256-GCM using a key derived from it with HKDF. A challenge/response handshake proves the other side holds the key, and sequence numbers block replays. That keeps GitHub, the PeerJS broker and any relay out: they can't read or forge room traffic.
+- **Unguessable meeting point.** The room's address on the broker is a hash of the code *and* the secret, so someone who only sees the room code (say, in a screenshot) can't find, join or jam the room.
 - **No server of our own.** The public [PeerJS](https://peerjs.com) broker only introduces the two browsers. After that, traffic flows directly over WebRTC. Nothing is stored server-side.
 - **Hardening:**
   - Strict Content-Security-Policy, and the app refuses to run inside a frame.

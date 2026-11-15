@@ -15,10 +15,10 @@
  * Whoever arrives first anchors the room; the other connects to them. A third
  * connection is refused while two people are connected.
  */
-import { Emitter, uid } from './util.js?v=20261115';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes } from './crypto.js?v=20261115';
+import { Emitter, uid } from './util.js?v=20261115b';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261115b';
 
-const ID_PREFIX = 'focusroom-v2-';
+const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
 const HEARTBEAT_MS = 4000;
 const DEAD_AFTER_MS = 15000;
 const HANDSHAKE_MS = 20000;
@@ -105,6 +105,7 @@ export class Room extends Emitter {
     this.code = code;
     this.secret = secret;
     this.key = await deriveRoomKey(secret, code);
+    this.peerId = ID_PREFIX + (await sha256hex(`focusroom-v3-id|${code}|${secret}`)).slice(0, 40);
     this.want = true;
     this.friend = null;
     this.fullTries = 0;
@@ -141,7 +142,7 @@ export class Room extends Emitter {
   _claim() {
     if (!this.want) return;
     this._destroyPeer();
-    const p = new window.Peer(ID_PREFIX + this.code, peerOptions());
+    const p = new window.Peer(this.peerId, peerOptions());
     this.peer = p;
     p.on('open', () => {
       if (this.peer !== p) return;
@@ -164,7 +165,7 @@ export class Room extends Emitter {
     this.peer = p;
     p.on('open', () => {
       if (this.peer !== p) return;
-      const conn = p.connect(ID_PREFIX + this.code, { reliable: true, serialization: 'json' });
+      const conn = p.connect(this.peerId, { reliable: true, serialization: 'json' });
       this._bind(conn, 'guest');
       this._later(() => {
         if (this.sess?.conn === conn && !conn.open) { try { conn.close(); } catch { /* noop */ } this.sess = null; this._retry(1500); }
@@ -193,7 +194,8 @@ export class Room extends Emitter {
   }
 
   _incoming(conn) {
-    if (this.connected) {
+    // keep a connected friend, or one who has already proven they hold the key
+    if (this.connected || (this.sess?.keyOk && this.sess.conn.open)) {
       // two people already here — refuse politely (plaintext: the newcomer may not have the key)
       conn.on('open', () => { try { conn.send({ t: 'full' }); } catch { /* noop */ } setTimeout(() => conn.close(), 800); });
       return;

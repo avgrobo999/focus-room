@@ -33,6 +33,12 @@ export async function sha256b64u(text) {
   return b64u(await crypto.subtle.digest('SHA-256', enc.encode(text)));
 }
 
+/** hex SHA-256 — used to derive the room's broker meeting point from the secret */
+export async function sha256hex(text) {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(text)));
+  return [...d].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export async function deriveRoomKey(secret, code) {
   const ikm = await crypto.subtle.importKey('raw', unb64u(secret), 'HKDF', false, ['deriveKey']);
   return crypto.subtle.deriveKey(

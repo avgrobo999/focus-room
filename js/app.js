@@ -1,13 +1,13 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261115';
-import { icon } from './icons.js?v=20261115';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261115';
-import { quoteOfTheDay } from './quotes.js?v=20261115';
-import { Timer } from './timer.js?v=20261115';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261115';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261115';
-import { Room, newRoom, parseInvite, roomSupported } from './room.js?v=20261115';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261115';
-import { sha256b64u } from './crypto.js?v=20261115';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261115b';
+import { icon } from './icons.js?v=20261115b';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261115b';
+import { quoteOfTheDay } from './quotes.js?v=20261115b';
+import { Timer } from './timer.js?v=20261115b';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261115b';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261115b';
+import { Room, newRoom, parseInvite, roomSupported } from './room.js?v=20261115b';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261115b';
+import { sha256b64u } from './crypto.js?v=20261115b';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -1060,6 +1060,9 @@ function buildRoomPanel() {
       h('p', { class: 'note', text: 'Your Google sign-in expired. Sign in again to reconnect:' }),
       h('div', { class: 'gsi-slot', id: 'room-reauth-btn' })),
     h('div', { id: 'friend-slot' }),
+    h('h3', { text: 'Who can join' }),
+    h('div', { id: 'lock-state', class: 'note' }),
+    h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
     h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', text: 'Start, pause and skip together' })), syncTog),
     h('div', { class: 'reacts', id: 'reacts' }, ...REACTS.map((e) => h('button', {
       text: e, title: `Send ${e}`, onclick: () => {
@@ -1069,9 +1072,6 @@ function buildRoomPanel() {
     h('div', { class: 'chat' },
       h('div', { class: 'chat-log', id: 'chat-log' }),
       h('div', { class: 'chat-form' }, chatIn, h('button', { class: 'icon-btn', html: icon('send'), title: 'Send', onclick: sendChat }))),
-    h('h3', { text: 'Who can join' }),
-    h('div', { id: 'lock-state', class: 'note' }),
-    h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
     h('div', { class: 'row between', style: { marginTop: '14px' } },
       h('button', {
         class: 'btn small', html: `${icon('image')}Share my theme`, onclick: () => {
@@ -1177,8 +1177,21 @@ function renderRoom() {
       lockState.append(`🔒 Only ${roomAllow.join(', ')} can join. `, h('button', {
         class: 'btn small', text: 'Unlock', onclick: () => { roomAllow = []; save('lastRoom', { ...load('lastRoom', {}), allow: [] }); renderRoom(); toast('Room unlocked'); },
       }));
-    } else lockState.textContent = 'Anyone with this invite link who signs in with Google. Lock it to one account:';
-    $('#lock-form').hidden = roomAllow.length > 0;
+    } else {
+      lockState.textContent = 'Anyone with this invite link who signs in with Google. ';
+      const fe = room.connected && room.friend?.email;
+      if (fe) {
+        lockState.append(h('button', {
+          class: 'btn small', id: 'lock-friend', text: `🔒 Lock to ${fe}`, onclick: () => {
+            roomAllow = [fe];
+            save('lastRoom', { ...load('lastRoom', {}), allow: roomAllow });
+            toast(`Room locked to ${fe} — nobody else can join, even with the link`);
+            renderRoom();
+          },
+        }));
+      } else lockState.append('Lock it to one account:');
+    }
+    $('#lock-form').hidden = roomAllow.length > 0 || !!(room.connected && room.friend?.email);
     const meLine = $('#me-line');
     meLine.innerHTML = '';
     const p = me();
