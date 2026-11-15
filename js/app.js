@@ -1,14 +1,14 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261116';
-import { icon } from './icons.js?v=20261116';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116';
-import { quoteOfTheDay } from './quotes.js?v=20261116';
-import { Timer } from './timer.js?v=20261116';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116';
-import { Voice, voiceSupported } from './voice.js?v=20261116';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116';
-import { sha256b64u } from './crypto.js?v=20261116';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid } from './util.js?v=20261116b';
+import { icon } from './icons.js?v=20261116b';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116b';
+import { quoteOfTheDay } from './quotes.js?v=20261116b';
+import { Timer } from './timer.js?v=20261116b';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116b';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116b';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116b';
+import { Voice, voiceSupported } from './voice.js?v=20261116b';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116b';
+import { sha256b64u } from './crypto.js?v=20261116b';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -918,8 +918,15 @@ function setUrlInvite(code, secret) {
 let stateSince = Date.now();
 function updateRoomHint() {
   const el = $('#room-hint');
-  if (el) el.hidden = !(['connecting', 'reconnecting', 'verifying'].includes(room.state) && Date.now() - stateSince > 15000);
+  if (!el) return;
+  const waiting = ['connecting', 'reconnecting', 'verifying'].includes(room.state);
+  const blocked = waiting && room.linkFails >= 2;
+  el.hidden = !(blocked || (waiting && Date.now() - stateSince > 15000));
+  el.textContent = blocked
+    ? 'Found the room, but this network won’t let your devices connect directly (common on Wi-Fi with “client isolation”, guest, office or campus networks). Try mobile data, or turn off a VPN or ad-blocker’s “WebRTC protection” for this site.'
+    : 'Taking a while? A VPN (including Opera’s built-in one), an ad-blocker’s “WebRTC protection”, or a strict network can block rooms. Turn those off for this site, or try Edge or Chrome.';
 }
+room.on('linkfail', () => updateRoomHint());
 room.on('state', (st) => {
   stateSince = Date.now();
   if (st !== 'connected') negotiated = false;

@@ -17,8 +17,8 @@
  * in the room, and forwards messages between them (re-encrypted per link).
  * If the anchor leaves, the others reconnect and one of them takes over.
  */
-import { Emitter, uid } from './util.js?v=20261116';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116';
+import { Emitter, uid } from './util.js?v=20261116b';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116b';
 
 const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
 export const MAX_PEOPLE = 4;
@@ -28,6 +28,37 @@ const HANDSHAKE_MS = 20000;
 const MAX_ENVELOPE = 120000; // chars of ciphertext
 const MID_RE = /^[A-Za-z0-9_-]{8,24}$/;
 const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
+
+/*
+ * Relay (TURN) for networks that block direct device-to-device links: Wi-Fi with
+ * client isolation, routers without hairpin NAT, strict office/campus networks.
+ * Fill in from your Metered dashboard (https://dashboard.metered.ca → TURN Server →
+ * credentials). These are visible to anyone who opens the site — that's unavoidable on
+ * a static site, so set a monthly usage limit in the dashboard. The relay only ever
+ * sees end-to-end-encrypted data and DTLS-SRTP-encrypted audio.
+ */
+const TURN = { username: '', credential: '' };
+
+function iceServers() {
+  const list = [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (TURN.username && TURN.credential) {
+    list.push(
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      {
+        urls: [
+          'turn:global.relay.metered.ca:80',
+          'turn:global.relay.metered.ca:80?transport=tcp',
+          'turn:global.relay.metered.ca:443',
+          'turns:global.relay.metered.ca:443?transport=tcp',
+        ],
+        username: TURN.username,
+        credential: TURN.credential,
+      },
+    );
+  }
+  return list;
+}
+export const relayConfigured = () => !!(TURN.username && TURN.credential);
 
 export const newRoom = () => ({ code: uid(10), secret: b64u(randomBytes(16)) });
 
@@ -39,7 +70,7 @@ export function parseInvite(input) {
 }
 
 function peerOptions() {
-  const opts = { debug: 0 };
+  const opts = { debug: 0, config: { iceServers: iceServers() } };
   if (!IS_LOCAL) return opts; // test hooks never apply on the real site
   const q = new URLSearchParams(location.search);
   if (q.get('peerhost')) {
@@ -154,6 +185,7 @@ export class Room extends Emitter {
     this.want = true;
     this.seen.clear();
     this.fullTries = 0;
+    this.linkFails = 0;
     this._setState('connecting');
     this._claim();
   }
@@ -226,7 +258,14 @@ export class Room extends Emitter {
       const conn = p.connect(this.peerId, { reliable: true, serialization: 'json' });
       const sess = this._bind(conn, 'guest');
       this._later(() => {
-        if (this.sessions.has(sess) && !conn.open) { this.sessions.delete(sess); try { conn.close(); } catch { /* noop */ } this._retry(1500); }
+        if (this.sessions.has(sess) && !conn.open) {
+          // the room is there but we can't reach it — usually the network blocks direct links
+          this.linkFails = (this.linkFails || 0) + 1;
+          this.emit('linkfail', this.linkFails);
+          this.sessions.delete(sess);
+          try { conn.close(); } catch { /* noop */ }
+          this._retry(1500);
+        }
       }, 12000);
     });
     p.on('error', (err) => {
@@ -467,6 +506,7 @@ export class Room extends Emitter {
     if (!(sess.keyOk && sess.authed && sess.ready) || sess.live) return;
     sess.live = true;
     this.fullTries = 0;
+    this.linkFails = 0;
     if (sess.role === 'guest') this.hostMid = sess.mid;
     this._setState('connected');
     this._addMember(this._member(sess));
