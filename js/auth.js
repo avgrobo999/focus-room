@@ -8,7 +8,7 @@
  * ID), expiry, verified email, and a nonce bound to this specific room, so a
  * token can't be reused anywhere else.
  */
-import { b64u, unb64u, utf8 } from './crypto.js?v=20261116g';
+import { b64u, unb64u, utf8 } from './crypto.js?v=20261116h';
 
 // Public OAuth Web client ID (not a secret). Paste yours here.
 export const GOOGLE_CLIENT_ID = '851506894285-25uvrujj9rt65nuilm5sh22do5aqqiqe.apps.googleusercontent.com';

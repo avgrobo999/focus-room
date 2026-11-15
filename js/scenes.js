@@ -1,7 +1,7 @@
 /**
  * Backgrounds: hand-built animated canvas scenes + photo themes + user uploads.
  */
-import { seeded, rand } from './util.js?v=20261116g';
+import { seeded, rand } from './util.js?v=20261116h';
 
 const TAU = Math.PI * 2;
 

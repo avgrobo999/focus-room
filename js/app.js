@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116g';
-import { icon } from './icons.js?v=20261116g';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116g';
-import { quoteOfTheDay } from './quotes.js?v=20261116g';
-import { Timer } from './timer.js?v=20261116g';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116g';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116g';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116g';
-import { Voice, voiceSupported } from './voice.js?v=20261116g';
-import { Ringtone } from './ring.js?v=20261116g';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116g';
-import { sha256b64u } from './crypto.js?v=20261116g';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116h';
+import { icon } from './icons.js?v=20261116h';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116h';
+import { quoteOfTheDay } from './quotes.js?v=20261116h';
+import { Timer } from './timer.js?v=20261116h';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116h';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116h';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116h';
+import { Voice, voiceSupported } from './voice.js?v=20261116h';
+import { Ringtone } from './ring.js?v=20261116h';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116h';
+import { sha256b64u } from './crypto.js?v=20261116h';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -132,11 +132,50 @@ function renderQuote() {
   $('#quote-text').textContent = `“${q.text}”`;
   $('#quote-author').textContent = q.author;
   $('#quote').hidden = !S.showQuote;
+  if ($('#quote-big')) fillBigQuote(q);
 }
-$('#quote').addEventListener('click', () => {
+
+/* click the quote: show it big, centred on the screen like the timer */
+function fillBigQuote(q) {
+  const box = $('#quote-big');
+  const len = q.text.length;
+  box.dataset.len = len < 50 ? 's' : len < 110 ? 'm' : len < 180 ? 'l' : 'xl';
+  $('p', box).textContent = `“${q.text}”`;
+  $('cite', box).textContent = q.author;
+}
+function closeBigQuote() {
+  const box = $('#quote-big');
+  if (!box) return;
+  box.classList.add('out');
+  setTimeout(() => box.remove(), 300);
+  removeEventListener('keydown', bigQuoteKeys);
+  $('#quote').focus?.();
+}
+function nextQuote() {
+  const box = $('#quote-big');
+  const fig = box && $('figure', box);
+  if (fig) fig.style.opacity = 0;
   $('#quote').style.opacity = 0;
-  setTimeout(() => { quoteOffset++; renderQuote(); $('#quote').style.opacity = 1; }, 300);
-});
+  setTimeout(() => { quoteOffset++; renderQuote(); $('#quote').style.opacity = 1; if (fig) fig.style.opacity = 1; }, 300);
+}
+function bigQuoteKeys(e) {
+  if (e.key === 'Escape') closeBigQuote();
+  else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextQuote(); }
+}
+function openBigQuote() {
+  if ($('#quote-big')) return;
+  const box = h('div', { id: 'quote-big', class: 'quote-big', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Quote', onclick: (e) => { if (!e.target.closest('button')) closeBigQuote(); } },
+    h('figure', {}, h('p', {}), h('cite', {})),
+    h('div', { class: 'qb-ctl' },
+      h('button', { class: 'btn', html: `${icon('refresh-cw')}Another quote`, onclick: nextQuote }),
+      h('button', { class: 'btn', text: 'Close', onclick: closeBigQuote })));
+  document.body.append(box);
+  fillBigQuote(quoteOfTheDay(quoteOffset));
+  addEventListener('keydown', bigQuoteKeys);
+  $('button', box).focus();
+}
+$('#quote').addEventListener('click', openBigQuote);
+$('#quote').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBigQuote(); } });
 
 /* ================= main focus (home) ================= */
 function renderMainFocus() {
