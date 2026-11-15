@@ -2,7 +2,7 @@
  * Procedural ambient soundscapes — everything is synthesized live with the
  * Web Audio API, so there are no audio files to download or license.
  */
-import { rand, pick } from './util.js?v=20261116b';
+import { rand, pick } from './util.js?v=20261116c';
 
 export const SOUND_LIST = [
   { id: 'rain', name: 'Rain', icon: 'cloud-rain', cat: 'Nature' },

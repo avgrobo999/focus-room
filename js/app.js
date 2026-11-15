@@ -1,14 +1,14 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116b';
-import { icon } from './icons.js?v=20261116b';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116b';
-import { quoteOfTheDay } from './quotes.js?v=20261116b';
-import { Timer } from './timer.js?v=20261116b';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116b';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116b';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116b';
-import { Voice, voiceSupported } from './voice.js?v=20261116b';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116b';
-import { sha256b64u } from './crypto.js?v=20261116b';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116c';
+import { icon } from './icons.js?v=20261116c';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116c';
+import { quoteOfTheDay } from './quotes.js?v=20261116c';
+import { Timer } from './timer.js?v=20261116c';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116c';
+import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116c';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116c';
+import { Voice, voiceSupported } from './voice.js?v=20261116c';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116c';
+import { sha256b64u } from './crypto.js?v=20261116c';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {

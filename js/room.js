@@ -17,8 +17,8 @@
  * in the room, and forwards messages between them (re-encrypted per link).
  * If the anchor leaves, the others reconnect and one of them takes over.
  */
-import { Emitter, uid, netLog, pathOf } from './util.js?v=20261116b';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116b';
+import { Emitter, uid, netLog, pathOf } from './util.js?v=20261116c';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261116c';
 
 const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
 export const MAX_PEOPLE = 4;
@@ -37,7 +37,7 @@ const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
  * a static site, so set a monthly usage limit in the dashboard. The relay only ever
  * sees end-to-end-encrypted data and DTLS-SRTP-encrypted audio.
  */
-const TURN = { username: '', credential: '' };
+const TURN = { username: '44d43173f63965ee1fbca667', credential: 'NO395cVSy2jZ2Cq8' };
 
 function iceServers() {
   const list = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -80,6 +80,7 @@ function peerOptions() {
     opts.secure = q.get('peersecure') !== '0';
   }
   if (q.get('ice') === 'none') opts.config = { iceServers: [] };
+  if (q.get('ice') === 'relay') opts.config = { iceServers: iceServers(), iceTransportPolicy: 'relay' };
   return opts;
 }
 
