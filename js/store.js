@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261116i';
+import { dayKey, uid } from './util.js?v=20261116j';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
   clock24: false,
   showSeconds: false,
   showQuote: true,
+  bigQuote: false, // quote shown large above the clock / timer
   timerType: 'pomodoro', // pomodoro | countdown | stopwatch
   preset: 'classic',
   focusMin: 25,

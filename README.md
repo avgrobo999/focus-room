@@ -11,7 +11,8 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Tasks:** your top unfinished task becomes your current focus. Drag to reorder and estimate sessions per task
 - **Ambient sounds:** 18 layerable sounds synthesized live in the browser (rain, thunder, wind, waves, stream, campfire, birds, crickets, typing, clock, white/pink/brown noise, binaural beats), plus one-click soundscapes
 - **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link
-- **Themes:** 8 animated canvas scenes, photo backgrounds, or upload your own
+- **Themes:** 8 animated canvas scenes, 11 live nature videos (seamlessly looping water, beach sunset, snowy starry sky with shooting stars…), or upload your own
+- **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions
 - **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
@@ -46,8 +47,8 @@ Create an OAuth **Web application** client in Google Cloud. Its "Authorized Java
 python3 -m http.server 8080   # then open http://localhost:8080
 ```
 
-Keyboard shortcuts: `Space` start/pause · `R` reset · `N` skip · `1 2 3` modes · `T` tasks · `S` sounds · `M` music · `B` themes · `G` room · `V` mute · `D` deafen (in a call) · `F` full screen.
+Keyboard shortcuts: `Space` start/pause · `R` reset · `N` skip · `1 2 3` modes · `T` tasks · `S` sounds · `M` music · `B` themes · `G` room · `V` mute · `D` deafen (in a call) · `F` full screen · `Q` big quote.
 
 ## Credits
 
-Icons from [Lucide](https://lucide.dev) (ISC). Fonts are Outfit and Instrument Serif (SIL OFL). Photo themes are hot-linked from [Unsplash](https://unsplash.com) (Unsplash License). Music presets embed Lofi Girl's YouTube live streams and Spotify playlists. Inspired by the layout of focus dashboards like Flocus, but all code, scenes and sounds are original.
+Icons from [Lucide](https://lucide.dev) (ISC). Fonts are Outfit and Instrument Serif (SIL OFL). Live nature themes are short clips hot-linked from [Mixkit](https://mixkit.co) (Mixkit Stock Video Free License). Music presets embed Lofi Girl's YouTube live streams and Spotify playlists. Inspired by the layout of focus dashboards like Flocus, but all code, scenes and sounds are original.

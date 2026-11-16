@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116i';
-import { icon } from './icons.js?v=20261116i';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116i';
-import { quoteOfTheDay } from './quotes.js?v=20261116i';
-import { Timer } from './timer.js?v=20261116i';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116i';
-import { SceneRenderer, CANVAS_SCENES, PHOTO_SCENES } from './scenes.js?v=20261116i';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116i';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116i';
-import { Ringtone } from './ring.js?v=20261116i';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116i';
-import { sha256b64u } from './crypto.js?v=20261116i';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116j';
+import { icon } from './icons.js?v=20261116j';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116j';
+import { quoteOfTheDay } from './quotes.js?v=20261116j';
+import { Timer } from './timer.js?v=20261116j';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116j';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116j';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116j';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116j';
+import { Ringtone } from './ring.js?v=20261116j';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116j';
+import { sha256b64u } from './crypto.js?v=20261116j';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -29,7 +29,7 @@ const saveTasks = () => save('tasks', tasks);
 let customScenes = load('customScenes', []);
 
 const timer = new Timer(() => S);
-const scenes = new SceneRenderer($('#scene-canvas'), $('#scene-img'));
+const scenes = new SceneRenderer($('#scene-canvas'), $('#scene-img'), $('#scene-vid'), $('#scene-fx'));
 const room = new Room({ verifyPeer: () => Promise.reject(new Error('not ready')), getToken: () => null });
 
 const PHASE_NAMES = { focus: 'Focus', short: 'Short break', long: 'Long break', countdown: 'Countdown', stopwatch: 'Stopwatch' };
@@ -132,50 +132,45 @@ function renderQuote() {
   $('#quote-text').textContent = `“${q.text}”`;
   $('#quote-author').textContent = q.author;
   $('#quote').hidden = !S.showQuote;
-  if ($('#quote-big')) fillBigQuote(q);
+  renderBigQuote(q);
 }
 
-/* click the quote: show it big, centred on the screen like the timer */
-function fillBigQuote(q) {
-  const box = $('#quote-big');
+/* click the quote: show it big, above the clock / timer (both stay on screen) */
+function renderBigQuote(q = quoteOfTheDay(quoteOffset)) {
+  const on = !!(S.bigQuote && S.showQuote);
+  document.body.classList.toggle('qb-on', on);
+  let box = $('#quote-big');
+  if (!on) {
+    if (box && !box.classList.contains('out')) { box.classList.add('out'); setTimeout(() => box.remove(), 300); }
+    return;
+  }
+  if (box?.classList.contains('out')) { box.remove(); box = null; }
+  if (!box) {
+    box = h('figure', { id: 'quote-big', class: 'quote-big', 'aria-label': 'Quote' },
+      h('div', { class: 'qb-text', title: 'Click for another quote', onclick: nextQuote }, h('p', {}), h('cite', {})),
+      h('div', { class: 'qb-ctl' },
+        h('button', { class: 'icon-btn', html: icon('refresh-cw'), title: 'Another quote', 'aria-label': 'Another quote', onclick: nextQuote }),
+        h('button', { class: 'icon-btn', html: icon('minimize'), title: 'Make it small again (Q)', 'aria-label': 'Make the quote small', onclick: () => setBigQuote(false) })));
+    $('#stage').prepend(box);
+  }
   const len = q.text.length;
   box.dataset.len = len < 50 ? 's' : len < 110 ? 'm' : len < 180 ? 'l' : 'xl';
   $('p', box).textContent = `“${q.text}”`;
   $('cite', box).textContent = q.author;
 }
-function closeBigQuote() {
-  const box = $('#quote-big');
-  if (!box) return;
-  box.classList.add('out');
-  setTimeout(() => box.remove(), 300);
-  removeEventListener('keydown', bigQuoteKeys);
-  $('#quote').focus?.();
+function setBigQuote(on) {
+  S.bigQuote = on; persist();
+  renderBigQuote();
+  if (!on) $('#quote').focus?.({ preventScroll: true });
 }
 function nextQuote() {
-  const box = $('#quote-big');
-  const fig = box && $('figure', box);
-  if (fig) fig.style.opacity = 0;
+  const txt = $('#quote-big .qb-text');
+  if (txt) txt.style.opacity = 0;
   $('#quote').style.opacity = 0;
-  setTimeout(() => { quoteOffset++; renderQuote(); $('#quote').style.opacity = 1; if (fig) fig.style.opacity = 1; }, 300);
+  setTimeout(() => { quoteOffset++; renderQuote(); $('#quote').style.opacity = 1; if (txt) txt.style.opacity = 1; }, 300);
 }
-function bigQuoteKeys(e) {
-  if (e.key === 'Escape') closeBigQuote();
-  else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextQuote(); }
-}
-function openBigQuote() {
-  if ($('#quote-big')) return;
-  const box = h('div', { id: 'quote-big', class: 'quote-big', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Quote', onclick: (e) => { if (!e.target.closest('button')) closeBigQuote(); } },
-    h('figure', {}, h('p', {}), h('cite', {})),
-    h('div', { class: 'qb-ctl' },
-      h('button', { class: 'btn', html: `${icon('refresh-cw')}Another quote`, onclick: nextQuote }),
-      h('button', { class: 'btn', text: 'Close', onclick: closeBigQuote })));
-  document.body.append(box);
-  fillBigQuote(quoteOfTheDay(quoteOffset));
-  addEventListener('keydown', bigQuoteKeys);
-  $('button', box).focus();
-}
-$('#quote').addEventListener('click', openBigQuote);
-$('#quote').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBigQuote(); } });
+$('#quote').addEventListener('click', () => setBigQuote(true));
+$('#quote').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBigQuote(true); } });
 
 /* ================= main focus (home) ================= */
 function renderMainFocus() {
@@ -529,13 +524,14 @@ function ensureMusicPlayer() {
 }
 
 /* ================= themes ================= */
-const allScenes = () => [...CANVAS_SCENES, ...PHOTO_SCENES, ...customScenes.map((c) => ({ ...c, kind: 'photo', custom: true }))];
+const allScenes = () => [...CANVAS_SCENES, ...VIDEO_SCENES, ...customScenes.map((c) => ({ ...c, kind: 'photo', custom: true }))];
 function setScene(id, { quiet } = {}) {
+  id = LEGACY_SCENES[id] || id;
   const def = allScenes().find((s) => s.id === id) || CANVAS_SCENES[0];
   scenes.set(def);
   S.scene = def.id; persist();
   document.body.classList.toggle('tone-light', def.tone === 'light');
-  document.body.classList.toggle('photo', def.kind === 'photo');
+  document.body.classList.toggle('photo', def.kind === 'photo' || def.kind === 'video');
   $$('.theme').forEach((t) => t.classList.toggle('on', t.dataset.id === def.id));
   if (!quiet) sendStatusSoon();
 }
@@ -557,7 +553,7 @@ function buildThemesPanel() {
   p.append(
     panelHead('Themes'),
     h('h3', { text: 'Animated scenes' }), h('div', { class: 'theme-grid', id: 'grid-canvas' }),
-    h('h3', { text: 'Photos' }), h('div', { class: 'theme-grid', id: 'grid-photo' }),
+    h('h3', { text: 'Live nature' }), h('div', { class: 'theme-grid', id: 'grid-photo' }),
     h('h3', { text: 'Your own' }), h('div', { class: 'theme-grid', id: 'grid-custom' }),
     h('div', { class: 'row', style: { marginTop: '10px' } },
       h('button', { class: 'btn', html: `${icon('upload')}Upload`, onclick: () => file.click() }), url,
@@ -588,7 +584,7 @@ function renderThemeGrids() {
   if (!gc) return;
   gc.innerHTML = ''; gp.innerHTML = ''; gu.innerHTML = '';
   for (const s of CANVAS_SCENES) gc.append(themeTile(s, thumbCache[s.id] ||= SceneRenderer.thumbnail(s)));
-  for (const s of PHOTO_SCENES) gp.append(themeTile(s, s.thumb));
+  for (const s of VIDEO_SCENES) gp.append(themeTile(s, s.thumb));
   for (const c of customScenes) gu.append(themeTile({ ...c, custom: true }, c.url));
   if (!customScenes.length) gu.append(h('p', { class: 'note', style: { gridColumn: '1 / -1' }, text: 'Upload a photo or paste an image link to make it your background.' }));
 }
@@ -747,7 +743,7 @@ function buildSettingsPanel() {
           location.reload();
         },
       })),
-    h('p', { class: 'note', style: { marginTop: '14px' }, html: 'Shortcuts: <b>Space</b> start/pause · <b>R</b> reset · <b>N</b> skip · <b>1 2 3</b> modes · <b>T</b> tasks · <b>S</b> sounds · <b>M</b> music · <b>B</b> themes · <b>G</b> room · <b>V</b> mute · <b>D</b> deafen (in a call) · <b>F</b> full screen' }),
+    h('p', { class: 'note', style: { marginTop: '14px' }, html: 'Shortcuts: <b>Space</b> start/pause · <b>R</b> reset · <b>N</b> skip · <b>1 2 3</b> modes · <b>T</b> tasks · <b>S</b> sounds · <b>M</b> music · <b>B</b> themes · <b>G</b> room · <b>V</b> mute · <b>D</b> deafen (in a call) · <b>F</b> full screen · <b>Q</b> big quote' }),
   );
 }
 
@@ -1246,7 +1242,8 @@ room.on('message', (msg, from) => {
       break;
     case 'scene': {
       if (!allowScene(from.mid)) break;
-      const builtIn = typeof msg.id === 'string' ? [...CANVAS_SCENES, ...PHOTO_SCENES].find((s) => s.id === msg.id) : null;
+      const sid = typeof msg.id === 'string' ? (LEGACY_SCENES[msg.id] || msg.id) : null;
+      const builtIn = sid ? [...CANVAS_SCENES, ...VIDEO_SCENES].find((s) => s.id === sid) : null;
       if (builtIn) { toast(`${who} shared the “${builtIn.name}” theme`, { action: { label: 'Use it', fn: () => setScene(builtIn.id) }, timeout: 8000 }); break; }
       const url = str(msg.url, 2048);
       if (/^https:\/\/[^\s"'()\\<>]+$/.test(url)) {
@@ -1844,6 +1841,7 @@ addEventListener('keydown', (e) => {
     1: () => setMode('ambient'), 2: () => setMode('home'), 3: () => setMode('focus'),
     t: () => openPanel('tasks'), s: () => openPanel('sounds'), m: () => openPanel('music'), b: () => openPanel('themes'), g: () => openPanel('room'),
     f: toggleFullscreen, escape: () => openPanel(null),
+    q: () => S.showQuote && setBigQuote(!S.bigQuote),
     ...(voice.inCall ? { v: () => voice.toggleMute(), d: () => voice.toggleDeaf() } : {}),
   };
   if (map[k]) { e.preventDefault(); map[k](); }

@@ -1,7 +1,7 @@
 /**
- * Backgrounds: hand-built animated canvas scenes + photo themes + user uploads.
+ * Backgrounds: hand-built animated canvas scenes + live nature videos + user uploads.
  */
-import { seeded, rand } from './util.js?v=20261116i';
+import { seeded, rand } from './util.js?v=20261116j';
 
 const TAU = Math.PI * 2;
 
@@ -445,31 +445,199 @@ export const CANVAS_SCENES = [
   { id: 'city', name: 'Midnight city', kind: 'canvas', tone: 'dark' },
 ];
 
-// Photo themes hot-linked from Unsplash (free to use under the Unsplash License)
-export const PHOTO_SCENES = [
-  ['1506905925346-21bda4d32df4', 'Above the clouds'],
-  ['1501785888041-af3ef285b470', 'Alpine lake'],
-  ['1470071459604-3b5ec3a7fe05', 'Misty valley'],
-  ['1441974231531-c6227db76b6e', 'Sunlit forest'],
-  ['1507525428034-b723cf961d3e', 'Beach sunset'],
-  ['1519681393784-d120267933ba', 'Starry peaks'],
-  ['1472214103451-9374bd1c798e', 'Sunset meadow'],
-  ['1433086966358-54859d0ed716', 'Waterfall bridge'],
-  ['1505142468610-359e7d316be0', 'Ocean waves'],
-  ['1500530855697-b586d89ba3ee', 'Desert road'],
-  ['1418065460487-3e41a6c84dc5', 'Foggy pines'],
-  ['1464822759023-fed622ff2c3b', 'Mountain lake'],
-].map(([pid, name]) => ({
-  id: `u${pid.slice(0, 13)}`, name, kind: 'photo',
-  url: `https://images.unsplash.com/photo-${pid}?auto=format&fit=crop&w=2400&q=80`,
-  thumb: `https://images.unsplash.com/photo-${pid}?auto=format&fit=crop&w=400&h=250&q=60`,
+/* Live nature themes: short clips hot-linked from Mixkit (Mixkit Stock Video Free License).
+   Each one loops through a crossfade so the jump back to the start isn't visible. */
+const MIX = 'https://assets.mixkit.co/videos';
+export const VIDEO_SCENES = [
+  [51592, 'Forest creek'],
+  [2186, 'Mossy waterfall'],
+  [51598, 'Sunlit river'],
+  [19239, 'Snowy starry night', { meteors: true }],
+  [44498, 'Beach sunset'],
+  [4283, 'Alpine clouds', { tone: 'light' }], // bright clips get a deeper shade behind the text
+  [25106, 'Snowfall in the pines', { tone: 'light' }],
+  [1704, 'Starlit lake'],
+  [3306, 'Snowy creek'],
+  [3350, 'Winter moonrise'],
+  [34788, 'Winter star trails'],
+].map(([vid, name, extra]) => ({
+  id: `v${vid}`, name, kind: 'video',
+  video: `${MIX}/${vid}/${vid}-720.mp4`,
+  poster: `${MIX}/${vid}/${vid}-thumb-720-0.jpg`,
+  thumb: `${MIX}/${vid}/${vid}-thumb-360-0.jpg`,
+  ...extra,
 }));
 
+// the old photo themes, mapped to the closest live one so saved choices still work
+export const LEGACY_SCENES = {
+  u1506905925346: 'v4283', u1501785888041: 'v1704', u1470071459604: 'v25106', u1441974231531: 'v51592',
+  u1507525428034: 'v44498', u1519681393784: 'v19239', u1472214103451: 'v44498', u1433086966358: 'v2186',
+  u1505142468610: 'v44498', u1500530855697: 'v4283', u1418065460487: 'v25106', u1464822759023: 'v1704',
+};
+
+/* Shooting stars drawn over a video (transparent canvas on top) */
+const METEORS = {
+  setup(s) { s.list = []; s.next = 1.5; },
+  draw(s, ctx, t, dt) {
+    const { w, h } = s;
+    ctx.clearRect(0, 0, w, h);
+    if (t > s.next) {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const a = rand(0.28, 0.62); // radians below horizontal
+      const sp = rand(380, 620) * Math.min(1.4, Math.max(0.7, w / 1400));
+      s.list.push({ x: dir > 0 ? rand(w * 0.05, w * 0.6) : rand(w * 0.4, w * 0.95), y: rand(h * 0.02, h * 0.3),
+        vx: Math.cos(a) * sp * dir, vy: Math.sin(a) * sp, life: rand(0.7, 1.25), age: 0, len: rand(0.18, 0.3) });
+      // now and then a second one close behind, like a real shower
+      s.next = t + (Math.random() < 0.18 ? rand(0.6, 1.5) : rand(4, 10));
+    }
+    ctx.lineCap = 'round';
+    s.list = s.list.filter((m) => {
+      m.age += dt;
+      const k = m.age / m.life;
+      if (k >= 1) return false;
+      const x = m.x + m.vx * m.age, y = m.y + m.vy * m.age;
+      const tx = x - m.vx * m.len, ty = y - m.vy * m.len;
+      const a = Math.sin(Math.PI * Math.min(1, k * 1.15)) ** 0.8;
+      const g = ctx.createLinearGradient(x, y, tx, ty);
+      g.addColorStop(0, `rgba(255,255,255,${0.95 * a})`);
+      g.addColorStop(0.25, `rgba(210,225,255,${0.45 * a})`);
+      g.addColorStop(1, 'rgba(200,215,255,0)');
+      ctx.strokeStyle = g; ctx.lineWidth = 1.8;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(tx, ty); ctx.stroke();
+      glow(ctx, x, y, 7, `rgba(255,255,255,${0.9 * a})`);
+      return true;
+    });
+  },
+};
+
+/* Plays a clip on a loop that doesn't show its seam: near the end a second copy starts
+   from the beginning and fades in over the first, then they swap roles. */
+const FADE = 1.8; // seconds
+class LoopVideo {
+  constructor(host) {
+    this.host = host;
+    this.seq = 0;
+    this.active = 0;
+    this.fading = false;
+    this.playing = false;
+    this.els = [0, 1].map(() => {
+      const v = document.createElement('video');
+      v.muted = true; v.defaultMuted = true; v.playsInline = true; v.loop = false; v.preload = 'auto';
+      for (const a of ['muted', 'playsinline', 'disablepictureinpicture', 'disableremoteplayback']) v.setAttribute(a, '');
+      v.tabIndex = -1;
+      v.addEventListener('timeupdate', () => this._check(v));
+      v.addEventListener('ended', () => this._check(v, true));
+      host.append(v);
+      return v;
+    });
+    this._unblock = () => { removeEventListener('pointerdown', this._unblock); this.resume(); };
+    // watchdog: if the browser pauses the clip on its own (stall, power saving), nudge it back
+    setInterval(() => {
+      const v = this.els[this.active];
+      if (this.playing && this.src && !document.hidden && v.paused && v.readyState >= 2) this._play(v);
+    }, 3000);
+  }
+
+  load(src, { onReady, onFail }) {
+    this.stop();
+    const seq = this.seq;
+    this.src = src;
+    const [a, b] = this.els;
+    this.active = 0;
+    a.style.zIndex = 1; b.style.zIndex = 0;
+    a.classList.add('on'); b.classList.remove('on');
+    let done = false;
+    const fail = () => { if (done || seq !== this.seq) return; done = true; this.stop(); onFail(); };
+    const timer = setTimeout(fail, 25000);
+    a.onerror = () => { clearTimeout(timer); fail(); };
+    a.onloadeddata = () => {
+      a.onloadeddata = null;
+      if (done || seq !== this.seq) return;
+      done = true; clearTimeout(timer);
+      onReady();
+      this.playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (this.playing && !document.hidden) this._play(a);
+    };
+    a.src = src;
+    a.load();
+  }
+
+  stop() {
+    this.seq++;
+    this.playing = false;
+    this.fading = false;
+    clearTimeout(this.fadeTimer);
+    for (const v of this.els) {
+      v.onloadeddata = v.onerror = null;
+      v.pause();
+      v.classList.remove('on');
+      if (v.hasAttribute('src')) { v.removeAttribute('src'); v.load(); } // drop the download
+    }
+    this.src = null;
+  }
+
+  pause() { for (const v of this.els) v.pause(); }
+
+  resume() {
+    if (!this.playing || !this.src) return;
+    this._play(this.els[this.active]);
+    if (this.fading) this._play(this.els[1 - this.active]);
+  }
+
+  _play(v) {
+    const p = v.play();
+    // autoplay can be refused (e.g. iPhone low-power mode): try again on the first tap
+    p?.catch?.(() => addEventListener('pointerdown', this._unblock));
+    return p;
+  }
+
+  _check(v, ended = false) {
+    if (!this.playing || this.fading || v !== this.els[this.active]) return;
+    const d = v.duration;
+    if (!isFinite(d) || !d) return;
+    const other = this.els[1 - this.active];
+    if (other.getAttribute('src') !== this.src && v.currentTime > 1) { other.src = this.src; other.load(); } // warm up the twin
+    const fade = Math.min(FADE, d / 4);
+    if (ended || v.currentTime >= d - fade - 0.3) this._swap(fade);
+  }
+
+  _swap(fade) {
+    const out = this.els[this.active], inc = this.els[1 - this.active];
+    if (inc.getAttribute('src') !== this.src) { inc.src = this.src; inc.load(); }
+    this.fading = true;
+    this.active = 1 - this.active;
+    const seq = this.seq;
+    try { inc.currentTime = 0; } catch { /* not seekable yet */ }
+    inc.style.zIndex = 2; out.style.zIndex = 1;
+    inc.style.transitionDuration = `${fade}s`;
+    let started = false;
+    const go = () => {
+      if (started || seq !== this.seq) return;
+      started = true;
+      inc.classList.add('on');
+      this.fadeTimer = setTimeout(() => {
+        if (seq !== this.seq) return;
+        out.classList.remove('on'); out.pause();
+        inc.style.zIndex = 1; out.style.zIndex = 0;
+        this.fading = false;
+      }, fade * 1000 + 80);
+    };
+    inc.addEventListener('playing', go, { once: true });
+    this._play(inc)?.then?.(go, go);
+  }
+}
+
 export class SceneRenderer {
-  constructor(canvas, imgEl) {
+  constructor(canvas, imgEl, vidEl, fxCanvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.img = imgEl;
+    this.vid = vidEl;
+    this.video = new LoopVideo(vidEl);
+    this.fx = fxCanvas;
+    this.fxCtx = fxCanvas.getContext('2d');
+    this.fxImpl = null;
+    this.seq = 0;
     this.state = null;
     this.impl = null;
     this.t0 = performance.now();
@@ -477,11 +645,37 @@ export class SceneRenderer {
     this.reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this._frame = this._frame.bind(this);
     addEventListener('resize', () => this._resize());
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) this._kick(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) this.video.pause();
+      else { this.video.resume(); this._kick(); }
+    });
   }
 
   set(def) {
     this.def = def;
+    const seq = ++this.seq;
+    if (def.kind === 'video') {
+      // keep the current scene up until the clip can actually play
+      this.video.load(def.video, {
+        onReady: () => {
+          if (seq !== this.seq) return;
+          this.impl = null;
+          this.canvas.classList.remove('show');
+          this.img.classList.remove('show');
+          this.vid.classList.add('show');
+          this.fxImpl = def.meteors ? METEORS : null;
+          this.fx.classList.toggle('show', !!def.meteors);
+          this._resize();
+        },
+        // the clip couldn't load: show its still frame instead
+        onFail: () => { if (seq === this.seq) this.set({ ...def, kind: 'photo', url: def.poster }); },
+      });
+      return;
+    }
+    this.video.stop();
+    this.vid.classList.remove('show');
+    this.fxImpl = null;
+    this.fx.classList.remove('show');
     if (def.kind === 'canvas') {
       this.impl = IMPL[def.id];
       this.img.classList.remove('show');
@@ -492,23 +686,26 @@ export class SceneRenderer {
       this.canvas.classList.remove('show');
       const url = def.url;
       const probe = new Image();
-      probe.onload = () => { this.img.style.backgroundImage = `url("${url}")`; this.img.classList.add('show'); };
+      probe.onload = () => { if (seq !== this.seq) return; this.img.style.backgroundImage = `url("${url}")`; this.img.classList.add('show'); };
       probe.onerror = () => { // fall back to a canvas scene if the photo can't load
-        this.set(CANVAS_SCENES[0]);
+        if (seq === this.seq) this.set(CANVAS_SCENES[0]);
       };
       probe.src = url;
     }
   }
 
   _resize() {
-    if (!this.impl) return;
+    if (!this.impl && !this.fxImpl) return;
     const w = innerWidth, h = innerHeight;
     const dpr = Math.min(devicePixelRatio || 1, 1.5);
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.state = { w, h, dpr };
-    this.impl.setup(this.state);
+    for (const [c, x, impl] of [[this.canvas, this.ctx, this.impl], [this.fx, this.fxCtx, this.fxImpl]]) {
+      if (!impl) continue;
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    if (this.impl) { this.state = { w, h, dpr }; this.impl.setup(this.state); }
+    if (this.fxImpl) { this.fxState = { w, h, dpr }; this.fxImpl.setup(this.fxState); }
     this._kick();
   }
 
@@ -519,12 +716,13 @@ export class SceneRenderer {
 
   _frame(now) {
     this.raf = null;
-    if (!this.impl || document.hidden) return;
+    if ((!this.impl && !this.fxImpl) || document.hidden) return;
     const t = (now - this.t0) / 1000;
     const dt = Math.min(0.1, (now - (this.last || now)) / 1000);
     if (now - (this.last || 0) >= 33 || this.reduced) { // ~30fps
       this.last = now;
-      this.impl.draw(this.state, this.ctx, this.reduced ? 4 : t, dt || 0.033);
+      if (this.impl) this.impl.draw(this.state, this.ctx, this.reduced ? 4 : t, dt || 0.033);
+      if (this.fxImpl) this.fxImpl.draw(this.fxState, this.fxCtx, this.reduced ? 0 : t, dt || 0.033);
     }
     if (!this.reduced) this._kick();
   }
