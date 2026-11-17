@@ -1,16 +1,17 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117a';
-import { icon } from './icons.js?v=20261117a';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117a';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117a';
-import { quoteOfTheDay } from './quotes.js?v=20261117a';
-import { Timer } from './timer.js?v=20261117a';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117a';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117a';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117a';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117a';
-import { Ringtone } from './ring.js?v=20261117a';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117a';
-import { sha256b64u } from './crypto.js?v=20261117a';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117c';
+import { icon } from './icons.js?v=20261117c';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117c';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117c';
+import { quoteOfTheDay } from './quotes.js?v=20261117c';
+import { Timer } from './timer.js?v=20261117c';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117c';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117c';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117c';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117c';
+import { Ringtone } from './ring.js?v=20261117c';
+import { Popout, popoutSupported } from './popout.js?v=20261117c';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117c';
+import { sha256b64u } from './crypto.js?v=20261117c';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -43,6 +44,8 @@ const currentTask = () => tasks.find((t) => !t.done);
 
 /* ================= small UI helpers ================= */
 $$('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon)));
+// a short name under each dock icon
+$$('#dock [data-label]').forEach((b) => b.append(h('span', { class: 'lbl', text: b.dataset.label })));
 $('#t-reset').innerHTML = icon('rotate-ccw');
 $('#t-skip').innerHTML = icon('skip-forward');
 $('#mf-check').innerHTML = icon('check');
@@ -77,6 +80,10 @@ function panelHead(title, id) {
     h('button', { class: 'x', title: 'Close (Esc)', html: icon('x'), onclick: () => openPanel(null) }));
 }
 
+// settings switches show a setting changed somewhere else
+function refreshSettingToggles() {
+  $$('#panel-settings .toggle[data-key]').forEach((t) => { t.querySelector('input').checked = !!S[t.dataset.key]; });
+}
 function toggleEl(checked, onchange) {
   const input = h('input', { type: 'checkbox' });
   input.checked = !!checked;
@@ -322,13 +329,89 @@ function renderTimer() {
   $('#mini-phase').textContent = PHASE_NAMES[st.phase];
   $('#mini-time').textContent = txt;
   document.title = st.running ? `${txt} · ${PHASE_NAMES[st.phase]} — focusroom` : 'focusroom';
+  renderPopout();
 }
+
+/* ---------- the timer in its own little always-on-top window ---------- */
+const popout = new Popout({
+  toggle: () => { sound.ensure(); timer.toggle(); },
+  reset: () => $('#t-reset').click(),
+  skip: () => timer.state.type === 'pomodoro' && timer.skip(),
+});
+// the theme behind the pop-out: the clip's poster, the photo, or a still of the animated scene
+let popBgKey = '';
+let popBg = '';
+function popoutBg() {
+  if (popBgKey === S.scene) return popBg;
+  const def = allScenes().find((s) => s.id === S.scene);
+  let url = def?.poster || def?.url || '';
+  if (!url) { try { url = $('#scene-canvas').toDataURL('image/jpeg', 0.6); } catch { url = ''; } }
+  popBgKey = S.scene;
+  popBg = url ? `url("${url}")` : '';
+  return popBg;
+}
+function renderPopout() {
+  $('#popout-btn').classList.toggle('active', popout.open);
+  if (!popout.open) return;
+  const st = timer.state;
+  const v = timer.value();
+  const started = st.type === 'stopwatch' ? v > 0 : st.remainingMs < st.totalMs;
+  popout.render({
+    phase: PHASE_NAMES[st.type === 'pomodoro' ? st.phase : st.type],
+    time: fmtTimer(v),
+    eta: st.running && st.type !== 'stopwatch' ? `Ends at ${fmtClockTime(new Date(Date.now() + v))}` : '',
+    toggleLabel: st.running ? 'Pause' : started ? 'Resume' : 'Start',
+    resetTitle: st.type === 'stopwatch' ? 'Stop & save (R)' : 'Reset (R)',
+    showSkip: st.type === 'pomodoro',
+    task: currentTask()?.text || '',
+    bg: popoutBg(),
+  });
+}
+async function openPopout() {
+  if (popout.open) { popout.close(); return; }
+  if (await popout.show()) renderPopout();
+  else toast('Your browser couldn’t open the pop-out timer');
+}
+const popBtn = $('#popout-btn');
+popBtn.addEventListener('click', openPopout);
+if (!popoutSupported()) popBtn.hidden = true;
+
+// Installed as an app, the timer pops out into its always-on-top window when you press Start,
+// so it stays in view over your other apps while you work. (No web page can keep its own
+// window on top; the pop-out is the one window browsers keep above everything.)
+const isApp = () => ['standalone', 'minimal-ui', 'window-controls-overlay'].some((m) => matchMedia(`(display-mode: ${m})`).matches) || navigator.standalone === true;
+const pinOn = () => popoutSupported() && (S.pinOnStart ?? isApp());
+function pinIfStarted() {
+  if (pinOn() && timer.state.running && !popout.open) popout.show().then((ok) => ok && renderPopout());
+}
+
+let installEvt = null;
+const showInstall = () => { const r = $('#install-row'); if (r) r.hidden = !installEvt; };
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; showInstall(); });
+addEventListener('appinstalled', () => { installEvt = null; showInstall(); toast('focusroom is installed — open it from your Start menu, desktop or dock'); });
+async function installApp() {
+  if (!installEvt) return;
+  const e = installEvt;
+  e.prompt();
+  try { if ((await e.userChoice).outcome === 'accepted') installEvt = null; } catch { /* closed */ }
+  showInstall();
+}
+// Chrome opens it by itself when you switch tabs, if it allows that for this site
+// (during a voice call, or with "Automatic picture-in-picture" allowed in the site settings)
+function setAutoPopout() {
+  try {
+    navigator.mediaSession?.setActionHandler('enterpictureinpicture', popoutSupported() && S.autoPopout
+      ? () => { if (timer.state.running || room.state !== 'idle') popout.show().then((ok) => ok && renderPopout()); }
+      : null);
+  } catch { /* this browser doesn't have it */ }
+}
+setAutoPopout();
 
 function updateMini() {
   document.body.classList.toggle('show-mini', S.mode === 'home' && timer.state.running);
 }
 
-$('#t-toggle').addEventListener('click', () => { sound.ensure(); timer.toggle(); });
+$('#t-toggle').addEventListener('click', () => { sound.ensure(); timer.toggle(); pinIfStarted(); });
 $('#t-reset').addEventListener('click', () => {
   const swMin = timer.reset();
   if (swMin >= 1) { addSession(swMin, currentTask()?.text); toast(`Saved ${fmtDuration(swMin)} of focus`); renderStats(); }
@@ -550,6 +633,8 @@ function renderMusicControls() {
   const bar = $('#music-ctl');
   if (!bar) return;
   bar.hidden = !mc.frame;
+  $('#panel-music').classList.toggle('playing', !!mc.frame);
+  $('#panel-music').classList.toggle('spot', mc.kind === 'spotify');
   const yt = mc.kind.startsWith('youtube');
   const pp = $('#mc-play');
   pp.innerHTML = icon(mc.playing ? 'pause' : 'play');
@@ -589,6 +674,7 @@ function playMusic(m, autoplay = true) {
       mc.poll = setInterval(() => { if (mc.ready || ++n > 40) clearInterval(mc.poll); else mcSend({ event: 'listening' }); }, 250);
     });
   }
+  player.classList.toggle('yt', m.kind !== 'spotify');
   player.append(frame);
   player.hidden = false;
   $('#music-stop').hidden = false;
@@ -618,17 +704,21 @@ function buildMusicPanel() {
   };
   url.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   p.append(
-    panelHead('Music'),
+    h('div', { class: 'panel-head' },
+      h('h2', { text: 'Music' }),
+      h('div', { class: 'head-btns' },
+        h('button', { class: 'x', id: 'music-side-btn', html: icon('panel-right'), onclick: () => setMusicSide(!S.musicSide) }),
+        h('button', { class: 'x', title: 'Close (Esc)', html: icon('x'), onclick: () => (musicSideShown ? showMusicSide(false) : openPanel(null)) }))),
     musicControls(),
-    h('div', { class: 'music-list', id: 'music-list' }),
-    h('h3', { text: 'Your own playlist' }),
-    h('div', { class: 'row' }, url, h('button', { class: 'btn solid', text: 'Play', onclick: go })),
+    h('div', { class: 'music-list mx', id: 'music-list' }),
+    h('h3', { class: 'mx', text: 'Your own playlist' }),
+    h('div', { class: 'row mx' }, url, h('button', { class: 'btn solid', text: 'Play', onclick: go })),
     h('div', { class: 'player', id: 'player', hidden: true }),
-    h('div', { class: 'row between', style: { marginTop: '10px' } },
-      h('p', { class: 'note', text: 'Music keeps playing when you close this panel. Spotify plays full tracks when you’re signed in to Spotify in this browser.' }),
+    h('div', { class: 'row between music-foot', style: { marginTop: '10px' } },
+      h('p', { class: 'note mx', text: 'Music keeps playing when you close this panel. Spotify plays full tracks when you’re signed in to Spotify in this browser.' }),
       h('button', { class: 'btn small', id: 'music-stop', hidden: true, text: 'Stop', onclick: stopMusic })),
   );
-  renderMusicList(); renderMusicControls();
+  renderMusicList(); renderMusicControls(); renderMusicSideBtn();
 }
 function musicControls() {
   const vol = h('input', { type: 'range', min: 0, max: 100, step: 1, value: S.musicVolume, 'aria-label': 'Music volume' });
@@ -655,6 +745,32 @@ function musicControls() {
     h('p', { class: 'note mc-note', id: 'mc-note', text: 'Spotify’s player only lets other sites play and pause. Use its own buttons to skip; volume and shuffle aren’t available in Spotify embeds.' }),
   );
 }
+// The music player as a tall sidebar on the right (Spotify shows its whole track list there).
+// S.musicSide: Music opens as the sidebar rather than a panel. The dock button shows and hides it.
+let musicSideShown = false;
+function renderMusicSideBtn() {
+  const b = $('#music-side-btn');
+  if (!b) return;
+  b.title = S.musicSide ? 'Back to a small panel' : 'Show as a sidebar';
+  b.setAttribute('aria-label', b.title);
+  b.classList.toggle('on', S.musicSide);
+}
+function showMusicSide(show) {
+  musicSideShown = show;
+  if (show) {
+    ensurePanel('music'); ensureMusicPlayer();
+    if (openId === 'music') openPanel(null);
+  }
+  $('#panel-music').classList.toggle('side', show);
+  document.body.classList.toggle('music-side', show);
+  $('#dock [data-panel="music"]').classList.toggle('active', show || openId === 'music');
+}
+function setMusicSide(on) {
+  S.musicSide = on; persist();
+  renderMusicSideBtn();
+  if (on) showMusicSide(true);
+  else { showMusicSide(false); openPanel('music'); }
+}
 function ensureMusicPlayer() {
   if (musicBuilt) return;
   musicBuilt = true;
@@ -663,7 +779,13 @@ function ensureMusicPlayer() {
 
 /* ================= themes ================= */
 const allScenes = () => [...CANVAS_SCENES, ...VIDEO_SCENES, ...customScenes.map((c) => ({ ...c, kind: 'photo', custom: true }))];
-function setScene(id, { quiet } = {}) {
+// the message that shares a theme with the room, or null if it can't be shared (uploaded photos stay on this device)
+function sceneMsg(def) {
+  if (!def) return null;
+  if (def.custom) return def.url.startsWith('data:') ? null : { t: 'scene', url: def.url, name: def.name };
+  return { t: 'scene', id: def.id };
+}
+function setScene(id, { quiet, fromRoom } = {}) {
   id = LEGACY_SCENES[id] || id;
   const def = allScenes().find((s) => s.id === id) || CANVAS_SCENES[0];
   scenes.set(def);
@@ -672,6 +794,7 @@ function setScene(id, { quiet } = {}) {
   document.body.classList.toggle('photo', def.kind === 'photo' || def.kind === 'video');
   $$('.theme').forEach((t) => t.classList.toggle('on', t.dataset.id === def.id));
   if (!quiet) sendStatusSoon();
+  if (!quiet && !fromRoom && S.roomThemeSync && room.connected) { const m = sceneMsg(def); if (m) room.send(m); }
 }
 
 let thumbsMade = false;
@@ -853,7 +976,7 @@ function buildSettingsPanel() {
     s.addEventListener('change', () => { S[key] = s.value; persist(); after?.(s.value); });
     return s;
   };
-  const tog = (key, after) => toggleEl(S[key], (v) => { S[key] = v; persist(); after?.(v); });
+  const tog = (key, after) => { const t = toggleEl(S[key], (v) => { S[key] = v; persist(); after?.(v); }); t.dataset.key = key; return t; };
   const num = (key, min, max, after) => {
     const n = h('input', { type: 'number', class: 'field', min, max, value: S[key] });
     n.addEventListener('change', () => {
@@ -898,6 +1021,13 @@ function buildSettingsPanel() {
     row('Show seconds', tog('showSeconds', renderClock)),
     row('Show quote', tog('showQuote', renderQuote)),
     row('Auto-hide controls', tog('autoHide'), 'In ambient mode and while a timer runs'),
+    ...(popoutSupported() ? [
+      row('Keep the timer on top', toggleEl(pinOn(), (v) => { S.pinOnStart = v; persist(); }), 'Press Start and the timer pops out into a small window that stays above your other apps'),
+      row('Pop out the timer', tog('autoPopout', setAutoPopout), 'When you switch tabs, if your browser allows it'),
+    ] : []),
+    h('div', { class: 'set-row', id: 'install-row', hidden: !installEvt },
+      h('label', {}, 'Install as an app', h('span', { class: 'sub', text: 'Its own window and icon, with the timer kept on top while you work' })),
+      h('button', { class: 'btn small', html: `${icon('download')}Install`, onclick: installApp })),
     h('h3', { text: 'Timer' }),
     row('Timer type', sel('timerType', [['pomodoro', 'Pomodoro'], ['countdown', 'Countdown'], ['stopwatch', 'Stopwatch']], (v) => { timer.setType(v); renderTimer(); })),
     row('Preset', presetSel),
@@ -915,7 +1045,8 @@ function buildSettingsPanel() {
       if (v && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     }), 'When the tab is in the background'),
     h('h3', { text: 'Study room' }),
-    row('Sync timers by default', tog('roomSyncDefault'), 'When friends join your room'),
+    row('Sync timers', tog('roomSyncDefault', () => renderRoom()), 'Start, pause and skip together when friends join your room'),
+    row('Sync themes', tog('roomThemeSync', () => renderRoom()), 'Your theme changes go to the room, and friends’ come to you'),
     h('h3', { text: 'Your data' }),
     h('p', { class: 'note', text: 'Settings, tasks and themes are saved in this browser only. Back them up to move them to another device. Your focus log can follow your Google account: turn on Sync in Focus stats.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
     h('div', { class: 'row', style: { flexWrap: 'wrap' } },
@@ -1435,15 +1566,26 @@ room.on('message', (msg, from) => {
       if (!allowScene(from.mid)) break;
       const sid = typeof msg.id === 'string' ? (LEGACY_SCENES[msg.id] || msg.id) : null;
       const builtIn = sid ? [...CANVAS_SCENES, ...VIDEO_SCENES].find((s) => s.id === sid) : null;
-      if (builtIn) { toast(`${who} shared the “${builtIn.name}” theme`, { action: { label: 'Use it', fn: () => setScene(builtIn.id) }, timeout: 8000 }); break; }
+      if (builtIn) {
+        if (builtIn.id === S.scene) break;
+        if (S.roomThemeSync) { setScene(builtIn.id, { fromRoom: true }); toast(`${who} switched the theme to “${builtIn.name}”`, { timeout: 3000 }); break; }
+        toast(`${who} shared the “${builtIn.name}” theme`, { action: { label: 'Use it', fn: () => setScene(builtIn.id) }, timeout: 8000 });
+        break;
+      }
       const url = str(msg.url, 2048);
       if (/^https:\/\/[^\s"'()\\<>]+$/.test(url)) {
         let host = '';
         try { host = new URL(url).hostname; } catch { break; }
-        toast(`${who} shared a background from ${host}`, {
-          timeout: 8000,
-          action: { label: 'Use it', fn: () => { const c = { id: `c${uid(6)}`, name: str(msg.name, 30) || 'Shared', url }; customScenes.push(c); save('customScenes', customScenes); renderThemeGrids(); setScene(c.id); } },
-        });
+        const useIt = (opts) => {
+          let c = customScenes.find((x) => x.url === url);
+          if (!c) { c = { id: `c${uid(6)}`, name: str(msg.name, 30) || 'Shared', url }; customScenes.push(c); save('customScenes', customScenes); renderThemeGrids(); }
+          if (c.id !== S.scene) setScene(c.id, opts);
+        };
+        if (S.roomThemeSync) {
+          if (customScenes.find((x) => x.url === url)?.id === S.scene) break;
+          useIt({ fromRoom: true }); toast(`${who} switched to a background from ${host}`, { timeout: 3000 }); break;
+        }
+        toast(`${who} shared a background from ${host}`, { timeout: 8000, action: { label: 'Use it', fn: () => useIt() } });
       }
       break;
     }
@@ -1578,7 +1720,8 @@ function buildRoomPanel() {
     h('h3', { text: 'Who can join' }),
     h('div', { id: 'lock-state', class: 'note' }),
     h('div', { class: 'row', id: 'lock-form' }, lockIn, h('button', { class: 'btn small', text: 'Lock', onclick: applyLock })),
-    h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', text: 'Start, pause and skip together' })), syncTog),
+    h('div', { class: 'set-row', id: 'sync-row' }, h('label', {}, 'Sync our timers', h('span', { class: 'sub', id: 'sync-sub', text: 'Start, pause and skip together' })), syncTog),
+    h('div', { class: 'set-row', id: 'theme-sync-row' }, h('label', {}, 'Sync our themes', h('span', { class: 'sub', text: 'Your theme changes go to the room, and friends’ come to you' })), h('span', { id: 'theme-sync-toggle' })),
     notifySupported() ? h('div', { class: 'set-row', id: 'notify-row' },
       h('label', {}, 'Notify me', h('span', { class: 'sub', text: 'When a friend joins, starts a call or rings you while this tab is in the background' })),
       toggleEl(notifyOn, async function onNotify(on) {
@@ -1597,10 +1740,10 @@ function buildRoomPanel() {
     h('div', { class: 'row between', style: { marginTop: '14px' } },
       h('button', {
         class: 'btn small', html: `${icon('image')}Share my theme`, onclick: () => {
-          const def = allScenes().find((s) => s.id === S.scene);
+          const m = sceneMsg(allScenes().find((s) => s.id === S.scene));
           if (!room.connected) { toast('Nobody else is connected right now'); return; }
-          if (def?.custom && def.url.startsWith('data:')) { toast('Uploaded photos stay on your device — share a built-in theme or an image link'); return; }
-          room.send(def.custom ? { t: 'scene', url: def.url, name: def.name } : { t: 'scene', id: def.id });
+          if (!m) { toast('Uploaded photos stay on your device — share a built-in theme or an image link'); return; }
+          room.send(m);
           toast('Theme sent');
         },
       }),
@@ -1703,13 +1846,25 @@ function renderRoom() {
     const reauth = $('#room-reauth');
     reauth.hidden = !needReauth;
     if (needReauth) { const slot = $('#room-reauth-btn'); if (slot._nonce !== roomNonce + needReauth) { slot._nonce = roomNonce + needReauth; mountSignIn(slot); } }
+    // before anyone joins, the timer switch sets whether timers sync once they do
     const sync = $('#sync-toggle');
     sync.innerHTML = '';
-    sync.append(toggleEl(syncOn, (v) => {
-      if (!room.connected) { toast('Nobody else is connected right now'); renderRoom(); return; }
+    sync.append(toggleEl(room.connected ? syncOn : S.roomSyncDefault, (v) => {
+      if (!room.connected) {
+        S.roomSyncDefault = v; persist(); refreshSettingToggles();
+        toast(v ? 'Timers will sync when a friend joins' : 'Timers won’t sync when friends join');
+        return;
+      }
       setSync(v); toast(v ? `Timers synced with ${roomNames()}` : 'Timer sync off');
     }));
-    $('#sync-row').style.opacity = room.connected ? 1 : 0.5;
+    $('#sync-sub').textContent = room.connected ? 'Start, pause and skip together' : 'Start, pause and skip together once a friend joins';
+    const tsync = $('#theme-sync-toggle');
+    tsync.innerHTML = '';
+    tsync.append(toggleEl(S.roomThemeSync, (v) => {
+      S.roomThemeSync = v; persist(); refreshSettingToggles();
+      if (v && room.connected) { const m = sceneMsg(allScenes().find((s) => s.id === S.scene)); if (m) room.send(m); }
+      toast(v ? 'Themes synced: your changes go to the room, and theirs come to you' : 'Theme sync off');
+    }));
     const lockState = $('#lock-state');
     lockState.innerHTML = '';
     if (roomAllow.length) {
@@ -1976,11 +2131,12 @@ function ensurePanel(id) {
 }
 
 function openPanel(id) {
+  if (id === 'music' && S.musicSide) { showMusicSide(!musicSideShown); poke(); return; }
   if (id && openId === id) id = null;
   openId = id;
   if (id) ensurePanel(id);
   $$('.panel').forEach((p) => p.classList.toggle('open', p.id === `panel-${id}`));
-  $$('#dock [data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
+  $$('#dock [data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === id || (b.dataset.panel === 'music' && musicSideShown)));
   if (id === 'stats') {
     renderStats();
     // opening stats is a click, so Google's pop-up may open if the hour-long access has run out;
@@ -2007,7 +2163,10 @@ function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen?.();
   else document.documentElement.requestFullscreen?.().catch(() => {});
 }
-document.addEventListener('fullscreenchange', () => { fsBtn.innerHTML = icon(document.fullscreenElement ? 'minimize' : 'maximize'); });
+document.addEventListener('fullscreenchange', () => {
+  fsBtn.querySelector('.ic').outerHTML = icon(document.fullscreenElement ? 'minimize' : 'maximize');
+  fsBtn.querySelector('.lbl').textContent = document.fullscreenElement ? 'Exit full' : 'Full screen';
+});
 if (!document.documentElement.requestFullscreen) fsBtn.hidden = true;
 
 let idleT;
@@ -2032,11 +2191,11 @@ addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   const map = {
-    ' ': () => { timer.toggle(); if (S.mode === 'home') setMode('focus'); },
+    ' ': () => { timer.toggle(); pinIfStarted(); if (S.mode === 'home') setMode('focus'); },
     r: () => $('#t-reset').click(), n: () => timer.state.type === 'pomodoro' && timer.skip(),
     1: () => setMode('ambient'), 2: () => setMode('home'), 3: () => setMode('focus'),
     t: () => openPanel('tasks'), s: () => openPanel('sounds'), m: () => openPanel('music'), b: () => openPanel('themes'), g: () => openPanel('room'),
-    f: toggleFullscreen, escape: () => openPanel(null),
+    f: toggleFullscreen, p: () => popoutSupported() && openPopout(), escape: () => openPanel(null),
     q: () => S.showQuote && setBigQuote(!S.bigQuote),
     ...(voice.inCall ? { v: () => voice.toggleMute(), d: () => voice.toggleDeaf() } : {}),
   };
@@ -2047,7 +2206,7 @@ addEventListener('keydown', (e) => {
 let lastSec = 0;
 function loop() {
   timer.tick();
-  if (document.hidden) { renderTitleOnly(); return; }
+  if (document.hidden) { renderTitleOnly(); renderPopout(); return; }
   renderTimer();
   const sec = Math.floor(Date.now() / 1000);
   if (sec !== lastSec) {
@@ -2068,6 +2227,7 @@ try {
 
 /* ================= boot ================= */
 setScene(S.scene, { quiet: true });
+if (S.musicSide && S.music && innerWidth >= 1000) showMusicSide(true); // the music sidebar was up last time
 setMode(['home', 'focus', 'ambient'].includes(S.mode) ? S.mode : 'home');
 renderClock(); renderQuote(); renderMainFocus(); renderTimer(); updateRoomDot();
 sound.master = S.masterVolume;

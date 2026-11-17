@@ -10,8 +10,10 @@
   <meta property="og:title" content="focusroom — study together">
   <meta property="og:description" content="Aesthetic focus timer with ambient sounds, scenes, tasks and a shared room and voice call for you and your friends.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="fonts/fonts.css">
-  <link rel="stylesheet" href="css/style.css?v=20261117a">
+  <link rel="stylesheet" href="css/style.css?v=20261117c">
 </head>
 <body class="mode-home">
   <div id="bg" aria-hidden="true">
@@ -76,15 +78,16 @@
 
   <footer id="bottom">
     <nav id="dock" class="dock glass" aria-label="Tools">
-      <button data-panel="sounds" data-icon="audio-waveform" title="Ambient sounds (S)"></button>
-      <button data-panel="music" data-icon="music" title="Music (M)"></button>
-      <button data-panel="tasks" data-icon="list-todo" title="Tasks (T)"></button>
-      <button data-panel="stats" data-icon="chart-column" title="Focus stats"></button>
-      <button data-panel="themes" data-icon="image" title="Themes (B)"></button>
-      <button data-panel="room" data-icon="users" title="Study room (G)" class="room-btn"><i id="room-dot" class="dot-ind" hidden></i></button>
+      <button data-panel="sounds" data-label="Sounds" data-icon="audio-waveform" title="Ambient sounds (S)"></button>
+      <button data-panel="music" data-label="Music" data-icon="music" title="Music (M)"></button>
+      <button data-panel="tasks" data-label="Tasks" data-icon="list-todo" title="Tasks (T)"></button>
+      <button data-panel="stats" data-label="Stats" data-icon="chart-column" title="Focus stats"></button>
+      <button data-panel="themes" data-label="Themes" data-icon="image" title="Themes (B)"></button>
+      <button data-panel="room" data-label="Friends" data-icon="users" title="Study room (G)" class="room-btn"><i id="room-dot" class="dot-ind" hidden></i></button>
       <span class="sep"></span>
-      <button data-panel="settings" data-icon="settings" title="Settings"></button>
-      <button id="fullscreen-btn" data-icon="maximize" title="Full screen (F)"></button>
+      <button data-panel="settings" data-label="Settings" data-icon="settings" title="Settings"></button>
+      <button id="popout-btn" data-label="Pop out" data-icon="picture-in-picture-2" title="Pop out timer (P)"></button>
+      <button id="fullscreen-btn" data-label="Full screen" data-icon="maximize" title="Full screen (F)"></button>
     </nav>
     <div id="mode-switch" class="mode-switch glass" role="tablist" aria-label="Mode">
       <button data-mode="ambient" data-icon="flower-2" title="Ambient (1)"><span>Ambient</span></button>
@@ -106,6 +109,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="js/app.js?v=20261117a"></script>
+  <script type="module" src="js/app.js?v=20261117c"></script>
 </body>
 </html>

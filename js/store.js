@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261117a';
+import { dayKey, uid } from './util.js?v=20261117c';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -34,6 +34,7 @@ export const DEFAULT_SETTINGS = {
   alertVolume: 0.7,
   notify: false,
   autoHide: true,
+  autoPopout: true, // timer pops out into its own window when you switch tabs
   scene: 'dusk',
   customScenes: [], // {id, name, url}
   mode: 'home',
@@ -44,6 +45,9 @@ export const DEFAULT_SETTINGS = {
   musicMuted: false,
   musicShuffle: false,
   roomSyncDefault: true,
+  roomThemeSync: false, // in a study room, send my theme changes and take friends' automatically
+  musicSide: false, // music player docked as a sidebar
+  pinOnStart: null, // pop the timer out (always on top) when it starts; null = on when installed as an app
 };
 
 export const PRESETS = {

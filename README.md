@@ -10,16 +10,21 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Timer:** Pomodoro with presets (25/5, 50/10, Animedoro 40/20, 15/3, custom), countdown or stopwatch. Auto-start options, session tally, the clock time your session will end, alert sounds and desktop notifications
 - **Tasks:** your top unfinished task becomes your current focus. Drag to reorder and estimate sessions per task
 - **Ambient sounds:** 18 layerable sounds synthesized live in the browser (rain, thunder, wind, waves, stream, campfire, birds, crickets, typing, clock, white/pink/brown noise, binaural beats), plus one-click soundscapes
-- **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link. Play/pause from the panel; YouTube playlists also get previous/next, shuffle and a volume slider
+- **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link. Play/pause from the panel; YouTube playlists also get previous/next, shuffle and a volume slider. The sidebar button in the Music panel turns it into a tall sidebar on the right, so a Spotify playlist shows its whole track list next to the timer
 - **Themes:** 8 animated canvas scenes, 22 live nature videos (waterfalls, streams, beaches at sunset, rain and snow) that loop with no visible seam, a snowy starry sky with shooting stars, or upload your own
 - **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
+- **Pop-out timer:** in Chrome and Edge on desktop, the dock's pop-out button (or `P`) puts the timer in a small always-on-top window that stays in view when you switch tabs or minimise the browser. Chrome can also pop it out by itself when you switch tabs, during a voice call or if you allow *Automatic picture-in-picture* in the site settings
+- **Install as an app:** in Chrome or Edge, Settings → *Install as an app* (or the install icon in the address bar) gives focusroom its own window and icon. In the app, pressing Start pops the timer out into that always-on-top window, so it stays above your other apps while you work. Turn this off or on for the browser too with *Keep the timer on top*. A web app can't pin its own main window on top; the pop-out is the window browsers keep above everything
+- **Labelled dock:** each dock button has its name underneath (Sounds, Music, Tasks, Stats, Themes, Friends, Settings, Pop out, Full screen)
+- **Fits any window:** the clock, timer and quote scale with the window's width and height, in the browser, the installed app or the pop-out, down to a phone held sideways
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other ([privacy](privacy.html))
 - **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
   - **Voice call:** join or leave voice, mute (`V`), deafen (`D`), see who's talking, and set each person's volume. Audio goes browser to browser and is never recorded
-  - Timers can be synced: start, pause and skip together
+  - **Sync timers** (on by default): start, pause and skip together
+  - **Sync themes** (off by default): when you change your theme, everyone's changes with it. Both toggles are in the room panel and in Settings
   - See what everyone is working on and how long they have left
-  - Group chat, emoji reactions and theme sharing
+  - Group chat, emoji reactions and one-off theme sharing
   - Anyone can drop out and rejoin. If the person hosting the room leaves, someone else takes over automatically. A fifth visitor sees "room full"
 
 ## How the room is secured
