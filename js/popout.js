@@ -5,7 +5,7 @@
  * It opens from a click, or by itself when you switch to another tab, if Chrome allows it:
  * during a voice call, or when "Automatic picture-in-picture" is allowed in the site settings.
  */
-import { icon } from './icons.js?v=20261117c';
+import { icon } from './icons.js?v=20261117d';
 
 export const popoutSupported = () => 'documentPictureInPicture' in window && window.isSecureContext;
 
@@ -44,6 +44,7 @@ export class Popout {
   }
 
   get open() { return !!this.win && !this.win.closed; }
+  get doc() { return this.open && this.els ? this.win.document : null; }
 
   async show() {
     if (this.open) { this.win.focus?.(); return true; }

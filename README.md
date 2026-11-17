@@ -15,6 +15,7 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
 - **Pop-out timer:** in Chrome and Edge on desktop, the dock's pop-out button (or `P`) puts the timer in a small always-on-top window that stays in view when you switch tabs or minimise the browser. Chrome can also pop it out by itself when you switch tabs, during a voice call or if you allow *Automatic picture-in-picture* in the site settings
 - **Install as an app:** in Chrome or Edge, Settings → *Install as an app* (or the install icon in the address bar) gives focusroom its own window and icon. In the app, pressing Start pops the timer out into that always-on-top window, so it stays above your other apps while you work. Turn this off or on for the browser too with *Keep the timer on top*. A web app can't pin its own main window on top; the pop-out is the window browsers keep above everything
+- **Your buddy:** a little girl runs in when a focus session finishes and blows you a flying kiss, gives you a hug or winks, picked at random each time. Every 15–20 minutes she brings you a glass of water: tick *I drank water* and she jumps for joy and showers you with hearts. Snooze (or leave her waiting) and she walks off sad, then comes back in 5 minutes. Drag her anywhere on the screen and she stays there. She also shows up in the pop-out timer. Settings → *Your buddy* turns the cheers and water reminders on or off, keeps her on screen all the time, or calls her over to see her now
 - **Labelled dock:** each dock button has its name underneath (Sounds, Music, Tasks, Stats, Themes, Friends, Settings, Pop out, Full screen)
 - **Fits any window:** the clock, timer and quote scale with the window's width and height, in the browser, the installed app or the pop-out, down to a phone held sideways
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other ([privacy](privacy.html))
@@ -24,7 +25,7 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
   - **Sync timers** (on by default): start, pause and skip together
   - **Sync themes** (off by default): when you change your theme, everyone's changes with it. Both toggles are in the room panel and in Settings
   - See what everyone is working on and how long they have left
-  - Group chat, emoji reactions and one-off theme sharing
+  - Group chat, emoji reactions (10–15 of the emoji float up across everyone's screen) and one-off theme sharing
   - Anyone can drop out and rejoin. If the person hosting the room leaves, someone else takes over automatically. A fifth visitor sees "room full"
 
 ## How the room is secured

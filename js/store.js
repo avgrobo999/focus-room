@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261117c';
+import { dayKey, uid } from './util.js?v=20261117d';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -48,6 +48,10 @@ export const DEFAULT_SETTINGS = {
   roomThemeSync: false, // in a study room, send my theme changes and take friends' automatically
   musicSide: false, // music player docked as a sidebar
   pinOnStart: null, // pop the timer out (always on top) when it starts; null = on when installed as an app
+  buddyCheer: true, // the little girl runs in to cheer when a focus session ends
+  waterRemind: true, // ...and brings a glass of water every 15–20 minutes
+  buddyStay: false, // she stays on screen between visits
+  buddyPos: null, // where she stands: {x, y} as fractions of the window (her feet)
 };
 
 export const PRESETS = {

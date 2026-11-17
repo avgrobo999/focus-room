@@ -1,17 +1,18 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117c';
-import { icon } from './icons.js?v=20261117c';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117c';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117c';
-import { quoteOfTheDay } from './quotes.js?v=20261117c';
-import { Timer } from './timer.js?v=20261117c';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117c';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117c';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117c';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117c';
-import { Ringtone } from './ring.js?v=20261117c';
-import { Popout, popoutSupported } from './popout.js?v=20261117c';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117c';
-import { sha256b64u } from './crypto.js?v=20261117c';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117d';
+import { icon } from './icons.js?v=20261117d';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117d';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117d';
+import { quoteOfTheDay } from './quotes.js?v=20261117d';
+import { Timer } from './timer.js?v=20261117d';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117d';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117d';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117d';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117d';
+import { Ringtone } from './ring.js?v=20261117d';
+import { Popout, popoutSupported } from './popout.js?v=20261117d';
+import { Buddy } from './buddy.js?v=20261117d';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117d';
+import { sha256b64u } from './crypto.js?v=20261117d';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -60,17 +61,21 @@ function toast(msg, { action, timeout = 4200 } = {}) {
   return el;
 }
 
-function floatEmoji(emoji, n = 6) {
+function floatEmoji(emoji, n = 6, { spread = false } = {}) {
   for (let i = 0; i < n; i++) {
     const f = h('div', { class: 'floater', text: emoji });
-    f.style.left = `${15 + Math.random() * 70}%`;
-    f.style.setProperty('--dx', `${(Math.random() - 0.5) * 30}vw`);
-    f.style.animationDelay = `${i * 0.14}s`;
-    f.style.fontSize = `${32 + Math.random() * 26}px`;
+    // spread: all over the screen, a few starting part-way up so they fill it rather than trail in a line
+    f.style.left = spread ? `${(i + Math.random()) * (92 / n) + 4}%` : `${15 + Math.random() * 70}%`;
+    if (spread && i % 3) f.style.bottom = `${Math.random() * 30}vh`;
+    f.style.setProperty('--dx', `${(Math.random() - 0.5) * (spread ? 16 : 30)}vw`);
+    const delay = spread ? Math.random() * 1.6 : i * 0.14;
+    f.style.animationDelay = `${delay}s`;
+    f.style.fontSize = `${32 + Math.random() * (spread ? 34 : 26)}px`;
     $('#floaters').append(f);
-    setTimeout(() => f.remove(), 3800 + i * 140);
+    setTimeout(() => f.remove(), 3800 + delay * 1000);
   }
 }
+const REACT_BURST = () => 10 + Math.floor(Math.random() * 6); // 10–15 of the emoji you send or get
 
 function rangeFill(input) { input.style.setProperty('--p', `${(input.value / (input.max || 1)) * 100}%`); }
 
@@ -350,6 +355,13 @@ function popoutBg() {
   popBg = url ? `url("${url}")` : '';
   return popBg;
 }
+// the little girl who cheers you on and brings you water (on the page and in the pop-out)
+const buddy = new Buddy({
+  S, persist,
+  pipDoc: () => popout.doc,
+  chime: () => { if (S.alert !== 'none') sound.alert('marimba', S.alertVolume * 0.5); },
+  notify: (title, body) => notify(title, body),
+});
 function renderPopout() {
   $('#popout-btn').classList.toggle('active', popout.open);
   if (!popout.open) return;
@@ -428,6 +440,7 @@ timer.on('complete', ({ phase, minutes, type }) => {
     toast(`Focus session complete — ${fmtDuration(minutes)} logged. Take a breather ☕`, { timeout: 6000 });
     notify('Focus session complete', 'Time for a break.');
     floatEmoji('🎉', 5);
+    if (S.buddyCheer) buddy.cheer();
     room.send({ t: 'event', kind: 'complete', minutes });
   } else {
     toast('Break’s over — ready to focus?', { timeout: 6000 });
@@ -1044,6 +1057,15 @@ function buildSettingsPanel() {
     row('Desktop notification', tog('notify', async (v) => {
       if (v && 'Notification' in window && Notification.permission === 'default') await Notification.requestPermission();
     }), 'When the tab is in the background'),
+    h('h3', { text: 'Your buddy' }),
+    row('Cheer when a session ends', tog('buddyCheer'), 'She runs in with a flying kiss, a hug or a wink'),
+    row('Water reminders', tog('waterRemind', (v) => buddy.setWater(v)), 'She brings you a glass of water every 15–20 minutes'),
+    row('Keep her on screen', tog('buddyStay', () => buddy.render()), 'Otherwise she only comes by to cheer and bring water'),
+    row('Where she stands', h('span', { class: 'row' },
+      h('button', { class: 'btn small', text: 'Move her', onclick: () => { openPanel(null); buddy.placeHer(); } })), 'Drag her anywhere on the screen, any time'),
+    row('See her now', h('span', { class: 'row' },
+      h('button', { class: 'btn small', text: 'Cheer', onclick: () => { openPanel(null); buddy.cheer(); } }),
+      h('button', { class: 'btn small', text: 'Water', onclick: () => { openPanel(null); buddy.water(); } }))),
     h('h3', { text: 'Study room' }),
     row('Sync timers', tog('roomSyncDefault', () => renderRoom()), 'Start, pause and skip together when friends join your room'),
     row('Sync themes', tog('roomThemeSync', () => renderRoom()), 'Your theme changes go to the room, and friends’ come to you'),
@@ -1555,7 +1577,7 @@ room.on('message', (msg, from) => {
       break;
     }
     case 'react':
-      if (REACTS.includes(msg.emoji) && allowReact(from.mid)) { floatEmoji(msg.emoji, 6); toast(`${who} sent ${msg.emoji}`, { timeout: 2600 }); }
+      if (REACTS.includes(msg.emoji) && allowReact(from.mid)) { floatEmoji(msg.emoji, REACT_BURST(), { spread: true }); toast(`${who} sent ${msg.emoji}`, { timeout: 2600 }); }
       break;
     case 'event':
       if (!allowEvent(from.mid)) break;
@@ -1731,7 +1753,7 @@ function buildRoomPanel() {
       })) : null,
     h('div', { class: 'reacts', id: 'reacts' }, ...REACTS.map((e) => h('button', {
       text: e, title: `Send ${e}`, onclick: () => {
-        if (room.send({ t: 'react', emoji: e })) floatEmoji(e, 2); else toast('Nobody else is connected right now');
+        if (room.send({ t: 'react', emoji: e })) floatEmoji(e, REACT_BURST(), { spread: true }); else toast('Nobody else is connected right now');
       },
     }))),
     h('div', { class: 'chat' },
@@ -2206,6 +2228,7 @@ addEventListener('keydown', (e) => {
 let lastSec = 0;
 function loop() {
   timer.tick();
+  buddy.tick();
   if (document.hidden) { renderTitleOnly(); renderPopout(); return; }
   renderTimer();
   const sec = Math.floor(Date.now() / 1000);
@@ -2250,5 +2273,5 @@ addEventListener('hashchange', () => {
 
 // debugging handle (local development only)
 if (['localhost', '127.0.0.1'].includes(location.hostname)) {
-  window.focusroom = { timer, room, sound, ringtone, S, get syncOn() { return syncOn; }, voice, statuses, netLogText, get myToken() { return myToken; }, DEFAULT_SETTINGS };
+  window.focusroom = { timer, room, sound, ringtone, S, get syncOn() { return syncOn; }, voice, statuses, netLogText, buddy, get myToken() { return myToken; }, DEFAULT_SETTINGS };
 }
