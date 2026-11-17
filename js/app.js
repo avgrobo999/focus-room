@@ -1,15 +1,16 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116k';
-import { icon } from './icons.js?v=20261116k';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116k';
-import { quoteOfTheDay } from './quotes.js?v=20261116k';
-import { Timer } from './timer.js?v=20261116k';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116k';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116k';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116k';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116k';
-import { Ringtone } from './ring.js?v=20261116k';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116k';
-import { sha256b64u } from './crypto.js?v=20261116k';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116m';
+import { icon } from './icons.js?v=20261116m';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261116m';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261116m';
+import { quoteOfTheDay } from './quotes.js?v=20261116m';
+import { Timer } from './timer.js?v=20261116m';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116m';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116m';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116m';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116m';
+import { Ringtone } from './ring.js?v=20261116m';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116m';
+import { sha256b64u } from './crypto.js?v=20261116m';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -463,7 +464,8 @@ function parseMusic(url) {
     const host = u.hostname.replace(/^www\.|^m\./, '');
     if (host === 'youtu.be') return { kind: 'youtube', id: u.pathname.slice(1).split('/')[0] };
     if (host.endsWith('youtube.com') || host.endsWith('youtube-nocookie.com')) {
-      if (u.searchParams.get('list') && !u.searchParams.get('v')) return { kind: 'youtube-list', id: u.searchParams.get('list') };
+      // a playlist link, or a video opened from inside a playlist, plays the whole playlist
+      if (u.searchParams.get('list')) return { kind: 'youtube-list', id: u.searchParams.get('list'), v: u.searchParams.get('v') || undefined };
       if (u.searchParams.get('v')) return { kind: 'youtube', id: u.searchParams.get('v') };
       const m = u.pathname.match(/\/(?:embed|live|shorts)\/([\w-]{6,})/);
       if (m) return { kind: 'youtube', id: m[1] };
@@ -476,24 +478,121 @@ function parseMusic(url) {
   return null;
 }
 
+const YT_ORIGIN = 'https://www.youtube-nocookie.com';
+const SPOTIFY_ORIGIN = 'https://open.spotify.com';
 function musicSrc(m, autoplay) {
-  if (m.kind === 'youtube') return `https://www.youtube-nocookie.com/embed/${encodeURIComponent(m.id)}?autoplay=${autoplay ? 1 : 0}&rel=0&modestbranding=1`;
-  if (m.kind === 'youtube-list') return `https://www.youtube-nocookie.com/embed/videoseries?list=${encodeURIComponent(m.id)}&autoplay=${autoplay ? 1 : 0}`;
-  if (m.kind === 'spotify') return `https://open.spotify.com/embed/${m.id}?utm_source=generator&theme=0`;
+  // enablejsapi lets our own controls drive the YouTube player over postMessage
+  const yt = `autoplay=${autoplay ? 1 : 0}&rel=0&modestbranding=1&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  if (m.kind === 'youtube') return `${YT_ORIGIN}/embed/${encodeURIComponent(m.id)}?${yt}`;
+  if (m.kind === 'youtube-list') return `${YT_ORIGIN}/embed/${m.v ? encodeURIComponent(m.v) : 'videoseries'}?list=${encodeURIComponent(m.id)}&${yt}`;
+  if (m.kind === 'spotify') return `${SPOTIFY_ORIGIN}/embed/${m.id}?utm_source=generator&theme=0`;
   return '';
+}
+
+/* Remote control for the embedded player. YouTube's iframe API and Spotify's embed both take
+   commands over postMessage, so we talk to them directly instead of loading their (eval-based) loader scripts. */
+const mc = { frame: null, kind: '', playing: false, list: false, ready: false, poll: 0 };
+function mcSend(msg) {
+  const w = mc.frame?.contentWindow;
+  if (!w) return;
+  if (mc.kind === 'spotify') w.postMessage(msg, SPOTIFY_ORIGIN);
+  else w.postMessage(JSON.stringify({ ...msg, id: 1, channel: 'widget' }), YT_ORIGIN);
+}
+const ytCmd = (func, ...args) => mcSend({ event: 'command', func, args });
+function mcApplyPrefs() {
+  if (!mc.kind.startsWith('youtube')) return;
+  ytCmd('setVolume', S.musicVolume);
+  ytCmd(S.musicMuted ? 'mute' : 'unMute');
+  if (mc.list) ytCmd('setShuffle', !!S.musicShuffle);
+}
+function mcToggle() {
+  if (!mc.frame) return;
+  if (mc.kind === 'spotify') mcSend({ command: 'toggle' });
+  else ytCmd(mc.playing ? 'pauseVideo' : 'playVideo');
+  mc.playing = !mc.playing; // optimistic; the player's next update confirms it
+  renderMusicControls();
+}
+function mcSkip(dir) { if (mc.list) ytCmd(dir > 0 ? 'nextVideo' : 'previousVideo'); }
+function mcShuffle() {
+  S.musicShuffle = !S.musicShuffle; persist();
+  ytCmd('setShuffle', S.musicShuffle);
+  if (S.musicShuffle) ytCmd('nextVideo'); // jump to a random track so it's obvious shuffle is on
+  renderMusicControls();
+}
+addEventListener('message', (e) => {
+  if (!mc.frame || e.source !== mc.frame.contentWindow) return;
+  if (e.origin === SPOTIFY_ORIGIN) {
+    const d = e.data;
+    if (d?.type === 'ready') {
+      mc.ready = true; mcSend({ command: 'load_complete_ack' });
+      if (mc.autoplay) mcSend({ command: 'play' });
+    }
+    if (d?.type === 'playback_update' && d.payload) { mc.playing = !d.payload.isPaused; renderMusicControls(); }
+    return;
+  }
+  if (e.origin !== YT_ORIGIN || typeof e.data !== 'string') return;
+  let d; try { d = JSON.parse(e.data); } catch { return; }
+  if (d.event === 'onReady' || (d.event === 'initialDelivery' && !mc.ready)) {
+    mc.ready = true; clearInterval(mc.poll);
+    ytCmd('addEventListener', 'onStateChange');
+    mcApplyPrefs();
+  }
+  const info = d.info;
+  if (d.event === 'onStateChange' && typeof info === 'number') mc.playing = info === 1 || info === 3;
+  else if (info && typeof info === 'object') {
+    if (typeof info.playerState === 'number') mc.playing = info.playerState === 1 || info.playerState === 3;
+    if (Array.isArray(info.playlist)) mc.list = info.playlist.length > 1;
+  }
+  renderMusicControls();
+});
+
+function renderMusicControls() {
+  const bar = $('#music-ctl');
+  if (!bar) return;
+  bar.hidden = !mc.frame;
+  const yt = mc.kind.startsWith('youtube');
+  const pp = $('#mc-play');
+  pp.innerHTML = icon(mc.playing ? 'pause' : 'play');
+  pp.title = mc.playing ? 'Pause' : 'Play';
+  $('#mc-prev').hidden = $('#mc-next').hidden = $('#mc-shuffle').hidden = !(yt && mc.list);
+  $('#mc-shuffle').classList.toggle('on', !!S.musicShuffle);
+  $('#mc-vol-wrap').hidden = !yt;
+  $('#mc-mute').innerHTML = icon(S.musicMuted || S.musicVolume === 0 ? 'volume-x' : 'volume-2');
+  $('#mc-note').hidden = yt;
+}
+
+function stopMusic() {
+  clearInterval(mc.poll);
+  Object.assign(mc, { frame: null, kind: '', playing: false, list: false, ready: false });
+  $('#player').innerHTML = ''; $('#player').hidden = true;
+  S.music = null; persist();
+  $('#music-stop').hidden = true;
+  renderMusicList(); renderMusicControls();
 }
 
 function playMusic(m, autoplay = true) {
   S.music = m; persist();
   const player = $('#player');
   player.innerHTML = '';
-  player.append(h('iframe', {
-    src: musicSrc(m, autoplay), height: m.kind === 'spotify' ? 152 : 210, loading: 'lazy', title: m.title || 'Music player',
+  clearInterval(mc.poll);
+  const frame = h('iframe', {
+    src: musicSrc(m, autoplay), height: m.kind === 'spotify' ? 152 : 210, title: m.title || 'Music player',
     allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture', referrerpolicy: 'strict-origin-when-cross-origin',
-  }));
+  });
+  // Spotify's embed never autoplays by itself, so we ask it to once it says it's ready
+  Object.assign(mc, { frame, kind: m.kind, playing: autoplay && m.kind !== 'spotify', autoplay, list: m.kind === 'youtube-list', ready: false });
+  if (m.kind !== 'spotify') {
+    // YouTube only starts reporting once we say we're listening; repeat until it answers
+    frame.addEventListener('load', () => {
+      clearInterval(mc.poll);
+      let n = 0;
+      mc.poll = setInterval(() => { if (mc.ready || ++n > 40) clearInterval(mc.poll); else mcSend({ event: 'listening' }); }, 250);
+    });
+  }
+  player.append(frame);
   player.hidden = false;
   $('#music-stop').hidden = false;
-  renderMusicList();
+  renderMusicList(); renderMusicControls();
 }
 
 function renderMusicList() {
@@ -520,15 +619,41 @@ function buildMusicPanel() {
   url.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   p.append(
     panelHead('Music'),
+    musicControls(),
     h('div', { class: 'music-list', id: 'music-list' }),
     h('h3', { text: 'Your own playlist' }),
     h('div', { class: 'row' }, url, h('button', { class: 'btn solid', text: 'Play', onclick: go })),
     h('div', { class: 'player', id: 'player', hidden: true }),
     h('div', { class: 'row between', style: { marginTop: '10px' } },
       h('p', { class: 'note', text: 'Music keeps playing when you close this panel. Spotify plays full tracks when you’re signed in to Spotify in this browser.' }),
-      h('button', { class: 'btn small', id: 'music-stop', hidden: true, text: 'Stop', onclick: () => { $('#player').innerHTML = ''; $('#player').hidden = true; S.music = null; persist(); $('#music-stop').hidden = true; renderMusicList(); } })),
+      h('button', { class: 'btn small', id: 'music-stop', hidden: true, text: 'Stop', onclick: stopMusic })),
   );
-  renderMusicList();
+  renderMusicList(); renderMusicControls();
+}
+function musicControls() {
+  const vol = h('input', { type: 'range', min: 0, max: 100, step: 1, value: S.musicVolume, 'aria-label': 'Music volume' });
+  rangeFill(vol);
+  vol.addEventListener('input', () => {
+    S.musicVolume = +vol.value; S.musicMuted = false; rangeFill(vol);
+    ytCmd('setVolume', S.musicVolume); ytCmd('unMute');
+    renderMusicControls();
+  });
+  vol.addEventListener('change', persist);
+  const btn = (id, ic, title, onclick) => h('button', { class: 'icon-btn', id, title, 'aria-label': title, html: icon(ic), onclick });
+  return h('div', { class: 'music-ctl', id: 'music-ctl', hidden: true },
+    btn('mc-shuffle', 'shuffle', 'Shuffle', mcShuffle),
+    btn('mc-prev', 'skip-back', 'Previous', () => mcSkip(-1)),
+    h('button', { class: 'mc-play', id: 'mc-play', title: 'Play', html: icon('play'), onclick: mcToggle }),
+    btn('mc-next', 'skip-forward', 'Next', () => mcSkip(1)),
+    h('div', { class: 'mc-vol', id: 'mc-vol-wrap' },
+      btn('mc-mute', 'volume-2', 'Mute', () => {
+        S.musicMuted = !S.musicMuted; persist();
+        ytCmd(S.musicMuted ? 'mute' : 'unMute');
+        renderMusicControls();
+      }),
+      vol),
+    h('p', { class: 'note mc-note', id: 'mc-note', text: 'Spotify’s player only lets other sites play and pause. Use its own buttons to skip; volume and shuffle aren’t available in Spotify embeds.' }),
+  );
 }
 function ensureMusicPlayer() {
   if (musicBuilt) return;
@@ -628,8 +753,60 @@ function addCustomImage(f) {
 
 /* ================= stats ================= */
 function buildStatsPanel() {
-  $('#panel-stats').append(panelHead('Focus stats'), h('div', { id: 'stats-body' }));
+  $('#panel-stats').append(panelHead('Focus stats'), h('div', { id: 'stats-sync', class: 'stats-sync' }), h('div', { id: 'stats-body' }));
+  renderSyncRow();
 }
+
+const ago = (t) => {
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
+// who the focus log belongs to, and whether it's reached their Google account yet
+function renderSyncRow() {
+  const box = $('#stats-sync');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!syncAvailable()) return;
+  const acct = logAccount();
+  const busy = syncStatus.state === 'syncing';
+  if (!acct) {
+    box.append(
+      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}` }, h('span', { html: icon('cloud') }), 'Saved in this browser only.',
+        syncStatus.state === 'error' ? h('span', { class: 'sub', text: syncStatus.error }) : null),
+      h('button', {
+        class: 'btn small', disabled: busy, title: 'Keep your focus log in your Google account so it follows you to any device',
+        html: `${icon('cloud')}<span>${busy ? 'Connecting…' : 'Sync with Google'}</span>`,
+        onclick: async () => { if (await signInSync()) toast(`Your focus log now follows ${logAccount()?.email || 'your account'}`); },
+      }),
+    );
+  } else {
+    const at = lastSyncAt();
+    const state = busy ? 'Syncing…'
+      : syncStatus.state === 'error' ? syncStatus.error
+        : hasUnsynced() ? (at ? `Synced ${ago(at)} · new sessions not uploaded yet` : 'Not synced yet')
+          : `Synced ${ago(at)}`;
+    box.append(
+      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}`, title: `Your focus log is kept in ${acct.email}’s Google Drive` },
+        h('span', { html: icon(hasUnsynced() || syncStatus.state === 'error' ? 'cloud' : 'cloud-check') }),
+        h('span', { class: 'who', text: acct.email }), h('span', { class: 'sub', text: state })),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn small', disabled: busy, html: `${icon('refresh-cw')}<span>Sync now</span>`, onclick: () => syncNow({ interactive: true }) }),
+        h('button', {
+          class: 'btn small', disabled: busy, html: `${icon('log-out')}<span>Sign out</span>`, title: 'Stop syncing on this device. Your log stays in your Google account',
+          onclick: async () => {
+            const { kept } = await signOutSync();
+            toast(kept ? 'Signed out. Some sessions hadn’t uploaded yet, so they’re kept here and will sync next time you sign in'
+              : 'Signed out. Your focus log is safe in your Google account');
+          },
+        })),
+    );
+  }
+}
+syncEvents.addEventListener('change', () => { renderSyncRow(); renderStats(); });
 
 function renderStats() {
   const body = $('#stats-body');
@@ -706,7 +883,7 @@ function buildSettingsPanel() {
       const data = JSON.parse(await fileIn.files[0].text());
       if (data.settings) save('settings', data.settings);
       if (data.tasks) save('tasks', data.tasks);
-      if (data.log) save('log', data.log);
+      if (Array.isArray(data.log)) setLog(mergeLogs(getLog(), data.log));
       if (data.customScenes) save('customScenes', data.customScenes);
       location.reload();
     } catch { toast('That file isn’t a focusroom backup'); }
@@ -739,11 +916,11 @@ function buildSettingsPanel() {
     h('h3', { text: 'Study room' }),
     row('Sync timers by default', tog('roomSyncDefault'), 'When friends join your room'),
     h('h3', { text: 'Your data' }),
-    h('p', { class: 'note', text: 'Everything is saved in this browser only. Back it up to move it to another device.' }),
+    h('p', { class: 'note', text: 'Settings, tasks and themes are saved in this browser only. Back them up to move them to another device. Your focus log can follow your Google account: turn on Sync in Focus stats.' }),
     h('div', { class: 'row', style: { flexWrap: 'wrap' } },
       h('button', {
         class: 'btn small', text: 'Export backup', onclick: () => {
-          const blob = new Blob([JSON.stringify({ settings: S, tasks, log: load('log', []), customScenes }, null, 1)], { type: 'application/json' });
+          const blob = new Blob([JSON.stringify({ settings: S, tasks, log: getLog(), customScenes }, null, 1)], { type: 'application/json' });
           const a = h('a', { href: URL.createObjectURL(blob), download: `focusroom-backup-${new Date().toISOString().slice(0, 10)}.json` });
           a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
         },
@@ -1803,7 +1980,12 @@ function openPanel(id) {
   if (id) ensurePanel(id);
   $$('.panel').forEach((p) => p.classList.toggle('open', p.id === `panel-${id}`));
   $$('#dock [data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === id));
-  if (id === 'stats') renderStats();
+  if (id === 'stats') {
+    renderStats();
+    // opening stats is a click, so Google's pop-up may open if the hour-long access has run out;
+    // keep that to when there's something to upload or it's been a while
+    if (logAccount()) syncNow({ interactive: hasUnsynced() || Date.now() - lastSyncAt() > 15 * 60e3 });
+  }
   if (id === 'themes' && !thumbsMade) { thumbsMade = true; renderThemeGrids(); }
   if (id === 'music') ensureMusicPlayer();
   if (id === 'room') { unread = 0; updateRoomDot(); renderChat(); setTimeout(() => (room.connected ? $('#chat-in') : null)?.focus({ preventScroll: true }), 50); }

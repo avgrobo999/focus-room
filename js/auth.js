@@ -8,14 +8,14 @@
  * ID), expiry, verified email, and a nonce bound to this specific room, so a
  * token can't be reused anywhere else.
  */
-import { b64u, unb64u, utf8 } from './crypto.js?v=20261116k';
+import { b64u, unb64u, utf8 } from './crypto.js?v=20261116m';
 
 // Public OAuth Web client ID (not a secret). Paste yours here.
 export const GOOGLE_CLIENT_ID = '851506894285-25uvrujj9rt65nuilm5sh22do5aqqiqe.apps.googleusercontent.com';
 
 const IS_LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
 // Local automated tests only: a fake issuer + keys served by the test server.
-const TEST = IS_LOCAL && new URLSearchParams(location.search).get('authtest') === '1';
+export const TEST = IS_LOCAL && new URLSearchParams(location.search).get('authtest') === '1';
 
 const CFG = TEST
   ? { clientId: 'focusroom-test-client', issuers: ['https://issuer.test'], jwks: '/__test__/jwks.json' }
@@ -93,7 +93,7 @@ export async function verifyIdToken(token, { nonce, allow = [] }) {
 
 /* ---------------- sign-in UI ---------------- */
 let gsi;
-function loadGsi() {
+export function loadGsi() {
   gsi ||= new Promise((resolve, reject) => {
     if (window.google?.accounts?.id) { resolve(); return; }
     const s = document.createElement('script');

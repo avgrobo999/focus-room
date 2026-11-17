@@ -10,10 +10,10 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Timer:** Pomodoro with presets (25/5, 50/10, Animedoro 40/20, 15/3, custom), countdown or stopwatch. Auto-start options, session tally, the clock time your session will end, alert sounds and desktop notifications
 - **Tasks:** your top unfinished task becomes your current focus. Drag to reorder and estimate sessions per task
 - **Ambient sounds:** 18 layerable sounds synthesized live in the browser (rain, thunder, wind, waves, stream, campfire, birds, crickets, typing, clock, white/pink/brown noise, binaural beats), plus one-click soundscapes
-- **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link
-- **Themes:** 8 animated canvas scenes, 28 live nature videos (seamlessly looping waterfalls, rivers, beaches at sunset, snowy starry skies with shooting stars…), or upload your own
+- **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link. Play/pause from the panel; YouTube playlists also get previous/next, shuffle and a volume slider
+- **Themes:** 8 animated canvas scenes, 22 live nature videos (waterfalls, streams, beaches at sunset, rain and snow) that loop with no visible seam, a snowy starry sky with shooting stars, or upload your own
 - **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
-- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions
+- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other
 - **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
   - **Voice call:** join or leave voice, mute (`V`), deafen (`D`), see who's talking, and set each person's volume. Audio goes browser to browser and is never recorded
@@ -40,6 +40,8 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 ### Setup: Google client ID
 
 Create an OAuth **Web application** client in Google Cloud. Its "Authorized JavaScript origin" is `https://avgrobo999.github.io`. Put the client ID (public, not a secret) in `GOOGLE_CLIENT_ID` in `js/auth.js`. Until then, rooms stay disabled and the rest of the app works normally.
+
+For focus-log sync, in the same Google Cloud project: enable the **Google Drive API**, and on the OAuth consent screen add the `.../auth/drive.appdata` scope ("See, create, and delete its own configuration data in your Google Drive"). While the consent screen is in *Testing*, only the test users listed there can sign in, so publish it to let anyone use sync.
 
 ## Run locally
 

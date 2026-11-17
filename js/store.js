@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261116k';
+import { dayKey, uid } from './util.js?v=20261116m';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -40,6 +40,9 @@ export const DEFAULT_SETTINGS = {
   masterVolume: 0.8,
   sounds: {}, // id -> volume (0..1) of active sounds
   music: null, // {kind, id, title}
+  musicVolume: 80, // 0..100, YouTube player
+  musicMuted: false,
+  musicShuffle: false,
   roomSyncDefault: true,
 };
 
@@ -63,15 +66,60 @@ export function clientId() {
 
 /* ---------- focus stats ---------- */
 // log: [{ts, day, min, task}]
-export function getLog() { return load('log', []); }
+// Signed in to sync, the log belongs to that Google account ('log:<email>', a local copy of
+// what's in the account's Drive); signed out it's this browser's own log ('log').
+export const logEvents = new EventTarget(); // 'added' when a session is saved
+
+export function logAccount() { return load('account', null); } // {email, name, picture} or null
+const logKey = (acct = logAccount()) => (acct?.email ? `log:${acct.email}` : 'log');
+export function getLog() { return load(logKey(), []); }
+
+// keep a year of history
+const prune = (log) => { const cutoff = Date.now() - 400 * 864e5; return log.filter((s) => s.ts >= cutoff); };
+export function setLog(log) { save(logKey(), prune(log)); }
+
+// a clean copy of one entry, or null if it isn't one (data from Drive or a backup file is untrusted)
+export function cleanEntry(s) {
+  if (!s || typeof s !== 'object') return null;
+  const { ts, day, min, task } = s;
+  if (!Number.isFinite(ts) || ts < 1.5e12 || ts > Date.now() + 864e5) return null;
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  if (!Number.isFinite(min) || min <= 0 || min > 24 * 60) return null;
+  return { ts, day, min, task: typeof task === 'string' ? task.slice(0, 200) : '' };
+}
+
+// union of logs; a session is the same session if it ended at the same moment with the same length
+export function mergeLogs(...logs) {
+  const all = new Map();
+  for (const log of logs) {
+    for (const raw of Array.isArray(log) ? log : []) {
+      const s = cleanEntry(raw);
+      if (s) all.set(`${s.ts}:${s.min}`, s);
+    }
+  }
+  return prune([...all.values()].sort((a, b) => a.ts - b.ts));
+}
+
+/** Switch whose log is shown. Signing in for the first time brings this browser's own log along. */
+export function useAccount(acct) {
+  if (!acct) { save('account', null); return; }
+  const prev = logAccount();
+  save('account', { email: acct.email, name: acct.name || acct.email, picture: acct.picture || '' });
+  if (!prev?.email) {
+    const guest = load('log', []);
+    if (guest.length) { save(logKey(acct), mergeLogs(load(logKey(acct), []), guest)); save('log', []); }
+  }
+}
+
+/** Forget an account's local copy (after it's safely in Drive). */
+export function dropAccountLog(email) {
+  try { localStorage.removeItem(PREFIX + `log:${email}`); } catch { /* ignore */ }
+}
 
 export function addSession(min, task) {
   if (min < 0.5) return;
-  const log = getLog();
-  log.push({ ts: Date.now(), day: dayKey(), min: Math.round(min * 10) / 10, task: task || '' });
-  // keep a year of history
-  const cutoff = Date.now() - 400 * 864e5;
-  save('log', log.filter((s) => s.ts >= cutoff));
+  setLog([...getLog(), { ts: Date.now(), day: dayKey(), min: Math.round(min * 10) / 10, task: task || '' }]);
+  logEvents.dispatchEvent(new Event('added'));
 }
 
 export function statsSummary() {

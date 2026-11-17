@@ -1,7 +1,7 @@
 /**
  * Backgrounds: hand-built animated canvas scenes + live nature videos + user uploads.
  */
-import { seeded, rand } from './util.js?v=20261116k';
+import { seeded, rand } from './util.js?v=20261116m';
 
 const TAU = Math.PI * 2;
 
@@ -445,54 +445,57 @@ export const CANVAS_SCENES = [
   { id: 'city', name: 'Midnight city', kind: 'canvas', tone: 'dark' },
 ];
 
-/* Live nature themes: short clips hot-linked from Mixkit (Mixkit Stock Video Free License).
-   Each one loops through a crossfade so the jump back to the start isn't visible. */
+/* Live nature themes: clips hot-linked from Mixkit (Mixkit Stock Video Free License).
+   Every clip here is shot from a still camera, and each one plays only the stretch [from, to)
+   picked by frame analysis so that the frames around `to` match the frames around `from`.
+   The loop crossfades between those matching moments, so the restart can't be seen. */
 const MIX = 'https://assets.mixkit.co/videos';
 export const VIDEO_SCENES = [
-  // rivers and waterfalls
-  [51592, 'Forest creek'],
-  [51598, 'Sunlit river'],
-  [18162, 'Rocky cascade'],
-  [2186, 'Mossy waterfall'],
-  [8014, 'Cave waterfall'],
-  [45315, 'Jungle falls'],
-  [48006, 'Hidden lagoon'],
-  [14319, 'Terraced falls'],
-  [2213, 'Rainforest falls'],
-  [11185, 'Rainbow falls'],
-  [46384, 'Thundering falls', { tone: 'light' }], // bright clips get a deeper shade behind the text
-  // beaches
-  [44498, 'Beach sunset'],
-  [1191, 'Palm at sunset'],
-  [1170, 'Palm silhouettes'],
-  [15169, 'Rocky shore sunset'],
-  [1086, 'Ocean sunrise'],
-  [34363, 'Sun on the water'],
-  [1925, 'Golden shoreline'],
-  [44482, 'Gentle waves'],
-  [5016, 'Blue shore', { tone: 'light' }],
-  [35574, 'Milky Way beach'],
-  // snow, mountains and night skies
-  [19239, 'Snowy starry night', { meteors: true }],
-  [4283, 'Alpine clouds', { tone: 'light' }],
-  [25106, 'Snowfall in the pines', { tone: 'light' }],
-  [1704, 'Starlit lake'],
-  [3306, 'Snowy creek'],
-  [3350, 'Winter moonrise'],
-  [34788, 'Winter star trails'],
-].map(([vid, name, extra]) => ({
-  id: `v${vid}`, name, kind: 'video',
-  video: `${MIX}/${vid}/${vid}-720.mp4`,
+  // waterfalls and rivers
+  [49337, 'Jungle waterfall', 0, 9.24],
+  [48006, 'Hidden lagoon', 3.36, 10.28],
+  [18162, 'Rocky cascade', 9.009, 23.724],
+  [11060, 'Great falls', 1.567, 9.667],
+  [45315, 'Jungle falls', 3.16, 11.52, { tone: 'light' }], // bright clips get a deeper shade behind the text
+  [11185, 'Rainbow falls', 6.6, 15.96, { tone: 'light' }],
+  [4374, 'Forest cascade', 2.24, 10.6],
+  [10993, 'Turquoise falls', 2.95, 10.95, { tone: 'light' }],
+  [46384, 'Thundering falls', 2.133, 7.267, { tone: 'light' }],
+  [8014, 'Cave waterfall', 16.717, 28.128],
+  [45610, 'Crystal stream', 5.873, 13.881, { tone: 'light' }],
+  // beaches and sea
+  [50155, 'Beach hut sunset', 0, 9.927, { tone: 'light' }],
+  [11359, 'Sunset bay', 2, 9.2, { tone: 'light' }],
+  [1170, 'Palm silhouettes', 3.712, 22.564],
+  [44500, 'Sunset terrace', 1.877, 9.885],
+  [44499, 'Palm at dusk', 2.252, 8.467],
+  [1191, 'Palm at sunset', 8.583, 16.958],
+  [1566, 'Calm sea at dawn', 6.173, 14.181, { tone: 'light' }],
+  // snow, rain and night
+  [25106, 'Snowfall in the pines', 0, 8, { tone: 'light' }],
+  [2716, 'Rain on the eaves', 1.418, 8.926],
+  [2206, 'Rain in the pines', 4.504, 12.93],
+  [22729, 'Misty forest', 3.25, 10.042],
+  // this one drifts, so it stays still and the shooting stars are what move
+  [19239, 'Snowy starry night', 0, 0, { meteors: true, still: true }],
+].map(([vid, name, from, to, extra = {}]) => ({
+  id: `v${vid}`, name, kind: extra.still ? 'photo' : 'video',
+  video: `${MIX}/${vid}/${vid}-720.mp4`, loop: [from, to],
   poster: `${MIX}/${vid}/${vid}-thumb-720-0.jpg`,
+  url: extra.still ? `${MIX}/${vid}/${vid}-thumb-720-0.jpg` : undefined,
   thumb: `${MIX}/${vid}/${vid}-thumb-360-0.jpg`,
   ...extra,
 }));
 
-// the old photo themes, mapped to the closest live one so saved choices still work
+// the old photo themes and retired clips, mapped to the closest live one so saved choices still work
 export const LEGACY_SCENES = {
-  u1506905925346: 'v4283', u1501785888041: 'v1704', u1470071459604: 'v25106', u1441974231531: 'v51592',
-  u1507525428034: 'v44498', u1519681393784: 'v19239', u1472214103451: 'v44498', u1433086966358: 'v2186',
-  u1505142468610: 'v44498', u1500530855697: 'v4283', u1418065460487: 'v25106', u1464822759023: 'v1704',
+  u1506905925346: 'v22729', u1501785888041: 'v19239', u1470071459604: 'v25106', u1441974231531: 'v4374',
+  u1507525428034: 'v50155', u1519681393784: 'v19239', u1472214103451: 'v11359', u1433086966358: 'v49337',
+  u1505142468610: 'v44500', u1500530855697: 'v22729', u1418065460487: 'v25106', u1464822759023: 'v19239',
+  v51592: 'v4374', v51598: 'v45610', v2186: 'v49337', v14319: 'v11060', v2213: 'v45315',
+  v44498: 'v50155', v15169: 'v44500', v1086: 'v1566', v34363: 'v11359', v1925: 'v11359',
+  v44482: 'v1566', v5016: 'v1566', v35574: 'v19239', v4283: 'v22729', v1704: 'v19239',
+  v3306: 'v25106', v3350: 'v19239', v34788: 'v19239',
 };
 
 /* Shooting stars drawn over a video (transparent canvas on top) */
@@ -530,9 +533,12 @@ const METEORS = {
   },
 };
 
-/* Plays a clip on a loop that doesn't show its seam: near the end a second copy starts
-   from the beginning and fades in over the first, then they swap roles. */
-const FADE = 1.8; // seconds
+/* Plays the stretch [from, to) of a clip on a loop that doesn't show its seam.
+   A second copy waits paused, already decoded at `from`. When the first reaches `to`
+   the second starts and fades in on top of it; the frames either side match, so the
+   blend reads as continuous motion. The first then rewinds to `from` and becomes the
+   next copy in waiting. */
+const FADE = 1; // seconds, the window the loop points were chosen for
 class LoopVideo {
   constructor(host) {
     this.host = host;
@@ -540,13 +546,16 @@ class LoopVideo {
     this.active = 0;
     this.fading = false;
     this.playing = false;
+    this.loop = [0, 0];
     this.els = [0, 1].map(() => {
       const v = document.createElement('video');
       v.muted = true; v.defaultMuted = true; v.playsInline = true; v.loop = false; v.preload = 'auto';
       for (const a of ['muted', 'playsinline', 'disablepictureinpicture', 'disableremoteplayback']) v.setAttribute(a, '');
       v.tabIndex = -1;
+      v.style.transitionDuration = `${FADE}s`;
       v.addEventListener('timeupdate', () => this._check(v));
       v.addEventListener('ended', () => this._check(v, true));
+      v.addEventListener('playing', () => this._watch(v));
       host.append(v);
       return v;
     });
@@ -558,10 +567,30 @@ class LoopVideo {
     }, 3000);
   }
 
-  load(src, { onReady, onFail }) {
+  // the loop window for the loaded clip, kept inside its real length
+  _window(v) {
+    const d = isFinite(v.duration) ? v.duration : 0;
+    let [a, b] = this.loop;
+    if (!(b > a) || b > d - 0.05) b = Math.max(0, d - FADE - 0.1);
+    if (b - a < 2) a = 0;
+    return [a, b];
+  }
+
+  // rewind a paused copy to the loop start so it's decoded and ready to go
+  _ready(v, seq) {
+    v.ready = false;
+    const [a] = this._window(v);
+    const done = () => { if (seq === this.seq) v.ready = true; };
+    if (Math.abs(v.currentTime - a) < 0.02 && v.readyState >= 2) return done();
+    v.addEventListener('seeked', done, { once: true });
+    try { v.currentTime = a; } catch { v.removeEventListener('seeked', done); }
+  }
+
+  load(src, { loop = [0, 0], onReady, onFail }) {
     this.stop();
     const seq = this.seq;
     this.src = src;
+    this.loop = loop;
     const [a, b] = this.els;
     this.active = 0;
     a.style.zIndex = 1; b.style.zIndex = 0;
@@ -570,13 +599,24 @@ class LoopVideo {
     const fail = () => { if (done || seq !== this.seq) return; done = true; this.stop(); onFail(); };
     const timer = setTimeout(fail, 25000);
     a.onerror = () => { clearTimeout(timer); fail(); };
-    a.onloadeddata = () => {
-      a.onloadeddata = null;
+    a.onloadedmetadata = () => {
+      a.onloadedmetadata = null;
       if (done || seq !== this.seq) return;
-      done = true; clearTimeout(timer);
-      onReady();
-      this.playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (this.playing && !document.hidden) this._play(a);
+      const [from] = this._window(a);
+      const show = () => {
+        if (done || seq !== this.seq) return;
+        done = true; clearTimeout(timer);
+        a.onerror = null;
+        onReady();
+        this.playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (this.playing && !document.hidden) this._play(a);
+        // the waiting copy loads once the first is under way, so they don't fight over bandwidth
+        b.onloadedmetadata = () => { b.onloadedmetadata = null; if (seq === this.seq) this._ready(b, seq); };
+        setTimeout(() => { if (seq === this.seq) { b.src = src; b.load(); } }, 1200);
+      };
+      if (from > 0.02) { a.addEventListener('seeked', show, { once: true }); a.currentTime = from; }
+      else if (a.readyState >= 2) show();
+      else a.addEventListener('loadeddata', show, { once: true });
     };
     a.src = src;
     a.load();
@@ -588,7 +628,8 @@ class LoopVideo {
     this.fading = false;
     clearTimeout(this.fadeTimer);
     for (const v of this.els) {
-      v.onloadeddata = v.onerror = null;
+      v.onloadedmetadata = v.onerror = null;
+      v.ready = false;
       v.pause();
       v.classList.remove('on');
       if (v.hasAttribute('src')) { v.removeAttribute('src'); v.load(); } // drop the download
@@ -611,25 +652,35 @@ class LoopVideo {
     return p;
   }
 
-  _check(v, ended = false) {
-    if (!this.playing || this.fading || v !== this.els[this.active]) return;
-    const d = v.duration;
-    if (!isFinite(d) || !d) return;
-    const other = this.els[1 - this.active];
-    if (other.getAttribute('src') !== this.src && v.currentTime > 1) { other.src = this.src; other.load(); } // warm up the twin
-    const fade = Math.min(FADE, d / 4);
-    if (ended || v.currentTime >= d - fade - 0.3) this._swap(fade);
+  // check the time on every decoded frame (timeupdate alone fires only ~4 times a second)
+  _watch(v) {
+    if (!v.requestVideoFrameCallback || v.watching) return;
+    v.watching = true;
+    const tick = () => {
+      if (v.paused || v.ended) { v.watching = false; return; }
+      this._check(v);
+      v.requestVideoFrameCallback(tick);
+    };
+    v.requestVideoFrameCallback(tick);
   }
 
-  _swap(fade) {
-    const out = this.els[this.active], inc = this.els[1 - this.active];
-    if (inc.getAttribute('src') !== this.src) { inc.src = this.src; inc.load(); }
+  _check(v, ended = false) {
+    if (!this.playing || this.fading || v !== this.els[this.active]) return;
+    const [from, to] = this._window(v);
+    if (!to) return;
+    if (!ended && v.currentTime < to - 0.02) return;
+    const inc = this.els[1 - this.active];
+    if (inc.ready) return this._swap(v, inc);
+    // the other copy isn't ready yet (slow network): run on to the end, then jump back
+    if (ended || v.currentTime >= v.duration - 0.1) { v.currentTime = from; this._play(v); }
+  }
+
+  _swap(out, inc) {
     this.fading = true;
     this.active = 1 - this.active;
     const seq = this.seq;
-    try { inc.currentTime = 0; } catch { /* not seekable yet */ }
+    inc.ready = false;
     inc.style.zIndex = 2; out.style.zIndex = 1;
-    inc.style.transitionDuration = `${fade}s`;
     let started = false;
     const go = () => {
       if (started || seq !== this.seq) return;
@@ -637,12 +688,13 @@ class LoopVideo {
       inc.classList.add('on');
       this.fadeTimer = setTimeout(() => {
         if (seq !== this.seq) return;
-        out.classList.remove('on'); out.pause();
+        out.pause();
+        out.classList.remove('on');
         inc.style.zIndex = 1; out.style.zIndex = 0;
         this.fading = false;
-      }, fade * 1000 + 80);
+        this._ready(out, seq);
+      }, FADE * 1000 + 60);
     };
-    inc.addEventListener('playing', go, { once: true });
     this._play(inc)?.then?.(go, go);
   }
 }
@@ -677,6 +729,7 @@ export class SceneRenderer {
     if (def.kind === 'video') {
       // keep the current scene up until the clip can actually play
       this.video.load(def.video, {
+        loop: def.loop,
         onReady: () => {
           if (seq !== this.seq) return;
           this.impl = null;
@@ -694,8 +747,8 @@ export class SceneRenderer {
     }
     this.video.stop();
     this.vid.classList.remove('show');
-    this.fxImpl = null;
-    this.fx.classList.remove('show');
+    this.fxImpl = def.meteors ? METEORS : null; // shooting stars can cross a still sky too
+    this.fx.classList.toggle('show', !!def.meteors);
     if (def.kind === 'canvas') {
       this.impl = IMPL[def.id];
       this.img.classList.remove('show');
