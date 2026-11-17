@@ -1,16 +1,16 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116m';
-import { icon } from './icons.js?v=20261116m';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261116m';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261116m';
-import { quoteOfTheDay } from './quotes.js?v=20261116m';
-import { Timer } from './timer.js?v=20261116m';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116m';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116m';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116m';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116m';
-import { Ringtone } from './ring.js?v=20261116m';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116m';
-import { sha256b64u } from './crypto.js?v=20261116m';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117a';
+import { icon } from './icons.js?v=20261117a';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117a';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117a';
+import { quoteOfTheDay } from './quotes.js?v=20261117a';
+import { Timer } from './timer.js?v=20261117a';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117a';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117a';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117a';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117a';
+import { Ringtone } from './ring.js?v=20261117a';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117a';
+import { sha256b64u } from './crypto.js?v=20261117a';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -776,6 +776,7 @@ function renderSyncRow() {
   if (!acct) {
     box.append(
       h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}` }, h('span', { html: icon('cloud') }), 'Saved in this browser only.',
+        h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' }),
         syncStatus.state === 'error' ? h('span', { class: 'sub', text: syncStatus.error }) : null),
       h('button', {
         class: 'btn small', disabled: busy, title: 'Keep your focus log in your Google account so it follows you to any device',
@@ -916,7 +917,7 @@ function buildSettingsPanel() {
     h('h3', { text: 'Study room' }),
     row('Sync timers by default', tog('roomSyncDefault'), 'When friends join your room'),
     h('h3', { text: 'Your data' }),
-    h('p', { class: 'note', text: 'Settings, tasks and themes are saved in this browser only. Back them up to move them to another device. Your focus log can follow your Google account: turn on Sync in Focus stats.' }),
+    h('p', { class: 'note', text: 'Settings, tasks and themes are saved in this browser only. Back them up to move them to another device. Your focus log can follow your Google account: turn on Sync in Focus stats.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
     h('div', { class: 'row', style: { flexWrap: 'wrap' } },
       h('button', {
         class: 'btn small', text: 'Export backup', onclick: () => {

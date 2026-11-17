@@ -13,7 +13,7 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link. Play/pause from the panel; YouTube playlists also get previous/next, shuffle and a volume slider
 - **Themes:** 8 animated canvas scenes, 22 live nature videos (waterfalls, streams, beaches at sunset, rain and snow) that loop with no visible seam, a snowy starry sky with shooting stars, or upload your own
 - **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
-- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other
+- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other ([privacy](privacy.html))
 - **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
   - **Voice call:** join or leave voice, mute (`V`), deafen (`D`), see who's talking, and set each person's volume. Audio goes browser to browser and is never recorded

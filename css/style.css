@@ -316,6 +316,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 .sync-line .who { color: var(--fg); font-weight: 500; overflow-wrap: anywhere; }
 .sync-line .sub { flex-basis: 100%; padding-left: 23px; font-size: 12.5px; }
 .sync-line.err .sub { color: #ffb3c1; }
+.sync-line a, .panel p.note a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 
 /* themes */
 .theme-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }

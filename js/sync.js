@@ -10,8 +10,8 @@
  * Syncing merges rather than overwrites: the account's log is the union of every
  * device's sessions, so two devices can't wipe out each other's time.
  */
-import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261116m';
-import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents } from './store.js?v=20261116m';
+import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261117a';
+import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents } from './store.js?v=20261117a';
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const SCOPES = `${DRIVE_SCOPE} openid email profile`;
