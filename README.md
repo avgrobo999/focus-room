@@ -7,11 +7,11 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 ## Features
 
 - **Three modes:** Home (clock, greeting, today's focus, quote), Focus (timer + current task) and Ambient (just the scene, with a small timer in the corner)
-- **Timer:** Pomodoro with presets (25/5, 50/10, Animedoro 40/20, 15/3, custom), countdown or stopwatch. Auto-start options, session tally, alert sounds and desktop notifications
+- **Timer:** Pomodoro with presets (25/5, 50/10, Animedoro 40/20, 15/3, custom), countdown or stopwatch. Auto-start options, session tally, the clock time your session will end, alert sounds and desktop notifications
 - **Tasks:** your top unfinished task becomes your current focus. Drag to reorder and estimate sessions per task
 - **Ambient sounds:** 18 layerable sounds synthesized live in the browser (rain, thunder, wind, waves, stream, campfire, birds, crickets, typing, clock, white/pink/brown noise, binaural beats), plus one-click soundscapes
 - **Music:** built-in lofi/synthwave streams and Spotify playlists, or paste any YouTube or Spotify link
-- **Themes:** 8 animated canvas scenes, 11 live nature videos (seamlessly looping water, beach sunset, snowy starry sky with shooting stars…), or upload your own
+- **Themes:** 8 animated canvas scenes, 28 live nature videos (seamlessly looping waterfalls, rivers, beaches at sunset, snowy starry skies with shooting stars…), or upload your own
 - **Big quote:** click the quote to show it large above the clock or timer (`Q` toggles)
 - **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions
 - **Study room (up to 4 people):**

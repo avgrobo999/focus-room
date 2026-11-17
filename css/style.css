@@ -135,6 +135,9 @@ body.photo.tone-light #bg-shade { background: radial-gradient(ellipse 70% 60% at
 .phase-tabs button:hover { color: var(--fg); }
 .phase-tabs button.active { background: rgba(255,255,255,.9); color: #1a1530; font-weight: 500; }
 .type-label { font-size: 18px; color: var(--muted); margin-bottom: 6px; }
+.timer-eta { min-height: 1.4em; margin-top: 2px; font-size: clamp(15px, 1.5vw, 19px); color: rgba(255,255,255,.85); letter-spacing: .02em; font-variant-numeric: tabular-nums; text-shadow: 0 1px 10px rgba(0,0,0,.55); }
+.timer-eta[hidden] { display: block; visibility: hidden; } /* keep its row so the controls don't jump on start */
+.mini-eta { font-size: 13px; font-variant-numeric: tabular-nums; }
 .tally { display: flex; gap: 8px; margin: 10px 0 4px; min-height: 18px; font-size: 15px; }
 .tally span { opacity: .3; transition: opacity .3s, transform .3s; }
 .tally span.on { opacity: 1; transform: scale(1.1); }
@@ -400,7 +403,7 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 }
 
 /* the huge clock/timer glyphs overflow their line box — keep interactive rows above them */
-.greeting, .main-focus, .phase-tabs, .timer-controls, .focus-task, .tally, .type-label { position: relative; z-index: 1; }
+.greeting, .main-focus, .phase-tabs, .timer-controls, .focus-task, .tally, .timer-eta, .type-label { position: relative; z-index: 1; }
 .clock, .timer { position: relative; z-index: 0; pointer-events: none; }
 
 /* medium widths: keep the friend chip clear of the quote */

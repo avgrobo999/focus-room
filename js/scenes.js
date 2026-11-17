@@ -1,7 +1,7 @@
 /**
  * Backgrounds: hand-built animated canvas scenes + live nature videos + user uploads.
  */
-import { seeded, rand } from './util.js?v=20261116j';
+import { seeded, rand } from './util.js?v=20261116k';
 
 const TAU = Math.PI * 2;
 
@@ -449,12 +449,32 @@ export const CANVAS_SCENES = [
    Each one loops through a crossfade so the jump back to the start isn't visible. */
 const MIX = 'https://assets.mixkit.co/videos';
 export const VIDEO_SCENES = [
+  // rivers and waterfalls
   [51592, 'Forest creek'],
-  [2186, 'Mossy waterfall'],
   [51598, 'Sunlit river'],
-  [19239, 'Snowy starry night', { meteors: true }],
+  [18162, 'Rocky cascade'],
+  [2186, 'Mossy waterfall'],
+  [8014, 'Cave waterfall'],
+  [45315, 'Jungle falls'],
+  [48006, 'Hidden lagoon'],
+  [14319, 'Terraced falls'],
+  [2213, 'Rainforest falls'],
+  [11185, 'Rainbow falls'],
+  [46384, 'Thundering falls', { tone: 'light' }], // bright clips get a deeper shade behind the text
+  // beaches
   [44498, 'Beach sunset'],
-  [4283, 'Alpine clouds', { tone: 'light' }], // bright clips get a deeper shade behind the text
+  [1191, 'Palm at sunset'],
+  [1170, 'Palm silhouettes'],
+  [15169, 'Rocky shore sunset'],
+  [1086, 'Ocean sunrise'],
+  [34363, 'Sun on the water'],
+  [1925, 'Golden shoreline'],
+  [44482, 'Gentle waves'],
+  [5016, 'Blue shore', { tone: 'light' }],
+  [35574, 'Milky Way beach'],
+  // snow, mountains and night skies
+  [19239, 'Snowy starry night', { meteors: true }],
+  [4283, 'Alpine clouds', { tone: 'light' }],
   [25106, 'Snowfall in the pines', { tone: 'light' }],
   [1704, 'Starlit lake'],
   [3306, 'Snowy creek'],

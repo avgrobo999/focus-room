@@ -1,15 +1,15 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116j';
-import { icon } from './icons.js?v=20261116j';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116j';
-import { quoteOfTheDay } from './quotes.js?v=20261116j';
-import { Timer } from './timer.js?v=20261116j';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116j';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116j';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116j';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116j';
-import { Ringtone } from './ring.js?v=20261116j';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116j';
-import { sha256b64u } from './crypto.js?v=20261116j';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261116k';
+import { icon } from './icons.js?v=20261116k';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary } from './store.js?v=20261116k';
+import { quoteOfTheDay } from './quotes.js?v=20261116k';
+import { Timer } from './timer.js?v=20261116k';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261116k';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261116k';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261116k';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261116k';
+import { Ringtone } from './ring.js?v=20261116k';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261116k';
+import { sha256b64u } from './crypto.js?v=20261116k';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -282,6 +282,11 @@ function buildTasksPanel() {
 
 /* ================= timer ================= */
 const timerEl = $('#timer');
+function fmtClockTime(d) {
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (S.clock24) return `${String(d.getHours()).padStart(2, '0')}:${mm}`;
+  return `${d.getHours() % 12 || 12}:${mm} ${d.getHours() >= 12 ? 'PM' : 'AM'}`;
+}
 function renderTimer() {
   const st = timer.state;
   const v = timer.value();
@@ -305,6 +310,14 @@ function renderTimer() {
       for (let i = 0; i < n; i++) tally.append(h('span', { class: i < st.cycle ? 'on' : '', text: TALLY[S.tally] || '●' }));
     }
   } else { tally.innerHTML = ''; tally._k = ''; }
+  // wall-clock time this session will finish, while a countdown is running
+  const eta = st.running && st.type !== 'stopwatch' ? fmtClockTime(new Date(Date.now() + v)) : '';
+  const etaEl = $('#timer-eta');
+  etaEl.hidden = !eta;
+  const etaTxt = eta && `Ends at ${eta}`;
+  if (etaEl.textContent !== etaTxt) etaEl.textContent = etaTxt;
+  $('#mini-eta').hidden = !eta;
+  $('#mini-eta').textContent = eta && `→ ${eta}`;
   $('#mini-phase').textContent = PHASE_NAMES[st.phase];
   $('#mini-time').textContent = txt;
   document.title = st.running ? `${txt} · ${PHASE_NAMES[st.phase]} — focusroom` : 'focusroom';

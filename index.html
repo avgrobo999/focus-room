@@ -11,7 +11,7 @@
   <meta property="og:description" content="Aesthetic focus timer with ambient sounds, scenes, tasks and a shared room and voice call for you and your friends.">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="fonts/fonts.css">
-  <link rel="stylesheet" href="css/style.css?v=20261116j">
+  <link rel="stylesheet" href="css/style.css?v=20261116k">
 </head>
 <body class="mode-home">
   <div id="bg" aria-hidden="true">
@@ -33,7 +33,7 @@
         <cite id="quote-author"></cite>
       </blockquote>
       <button id="mini-timer" class="glass mini-timer" title="Open focus mode">
-        <span id="mini-phase">Focus</span><b id="mini-time">25:00</b>
+        <span id="mini-phase">Focus</span><b id="mini-time">25:00</b><span id="mini-eta" class="mini-eta" hidden></span>
       </button>
     </div>
   </header>
@@ -60,6 +60,7 @@
       </div>
       <div id="type-label" class="type-label" hidden></div>
       <div id="timer" class="timer" role="timer" aria-live="off">25:00</div>
+      <div id="timer-eta" class="timer-eta" title="When this session will end, by your computer's clock" hidden></div>
       <div id="tally" class="tally" aria-label="Sessions this round"></div>
       <div class="timer-controls">
         <button id="t-reset" class="round glass" title="Reset (R)"></button>
@@ -105,6 +106,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="js/app.js?v=20261116j"></script>
+  <script type="module" src="js/app.js?v=20261116k"></script>
 </body>
 </html>

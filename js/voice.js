@@ -13,8 +13,8 @@
  *   {t:'rtc', cid, k:'offer'|'answer', sdp}  to one person
  *   {t:'rtc', cid, k:'ice', c}             to one person
  */
-import { Emitter, netLog, pathOf } from './util.js?v=20261116j';
-import { b64u, randomBytes } from './crypto.js?v=20261116j';
+import { Emitter, netLog, pathOf } from './util.js?v=20261116k';
+import { b64u, randomBytes } from './crypto.js?v=20261116k';
 
 const MAX_SDP = 20000;
 const CONNECT_TIMEOUT_MS = 20000;
