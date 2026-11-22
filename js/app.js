@@ -1,18 +1,18 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121d';
-import { icon } from './icons.js?v=20261121d';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount, WATER_GOAL_ML, BOTTLE_ML, waterEvents, waterToday, setWaterMl, fmtLitres, loadTasks, saveTasks as storeTasks, taskEvents } from './store.js?v=20261121d';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121d';
-import { quoteOfTheDay } from './quotes.js?v=20261121d';
-import { Timer } from './timer.js?v=20261121d';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121d';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121d';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121d';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121d';
-import { Ringtone } from './ring.js?v=20261121d';
-import { Popout, popoutSupported } from './popout.js?v=20261121d';
-import { Buddy } from './buddy.js?v=20261121d';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121d';
-import { sha256b64u } from './crypto.js?v=20261121d';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121e';
+import { icon } from './icons.js?v=20261121e';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount, WATER_GOAL_ML, BOTTLE_ML, waterEvents, waterToday, setWaterMl, fmtLitres, loadTasks, saveTasks as storeTasks, taskEvents } from './store.js?v=20261121e';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable, registerTimerSync, timerTouched, adoptAccount } from './sync.js?v=20261121e';
+import { quoteOfTheDay } from './quotes.js?v=20261121e';
+import { Timer } from './timer.js?v=20261121e';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121e';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121e';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121e';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121e';
+import { Ringtone } from './ring.js?v=20261121e';
+import { Popout, popoutSupported } from './popout.js?v=20261121e';
+import { Buddy } from './buddy.js?v=20261121e';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, setSignInHint, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121e';
+import { sha256b64u } from './crypto.js?v=20261121e';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -26,7 +26,17 @@ if (window.top !== window.self) {
 
 /* ================= state ================= */
 const S = loadSettings();
-const persist = debounce(() => save('settings', S), 250);
+// the timer's settings follow your Google account to your other devices, along with the timer itself
+const TIMER_LIMITS = { focusMin: [1, 180], shortMin: [1, 180], longMin: [1, 180], longEvery: [1, 12], countdownMin: [1, 600] };
+const TIMER_KEYS = ['timerType', 'preset', ...Object.keys(TIMER_LIMITS), 'autoBreaks', 'autoFocus'];
+const timerSettings = () => Object.fromEntries(TIMER_KEYS.map((k) => [k, S[k]]));
+let timerSettingsSeen = JSON.stringify(timerSettings());
+let applyingDevice = false; // taking the timer from another of your devices: that isn't a change of yours to pass on
+const persist = debounce(() => {
+  save('settings', S);
+  const now = JSON.stringify(timerSettings());
+  if (now !== timerSettingsSeen) { timerSettingsSeen = now; if (!applyingDevice) timerTouched(); }
+}, 250);
 let tasks = loadTasks(); // signed in to sync, they're the Google account's tasks
 let tasksOwner = logAccount()?.email || '';
 const saveTasks = () => storeTasks(tasks);
@@ -38,6 +48,29 @@ timer.restore(load('timer', null));
 let timerSavedAt = 0;
 const saveTimer = () => { timerSavedAt = Date.now(); save('timer', timer.persisted(timerSavedAt)); };
 addEventListener('pagehide', saveTimer);
+registerTimerSync({
+  get: () => ({ settings: timerSettings(), state: timer.persisted() }),
+  apply({ settings, state }) {
+    applyingDevice = true;
+    try {
+      const s = settings && typeof settings === 'object' ? settings : {};
+      if (['pomodoro', 'countdown', 'stopwatch'].includes(s.timerType)) S.timerType = s.timerType;
+      if (Object.hasOwn(PRESETS, s.preset)) S.preset = s.preset;
+      for (const [k, [lo, hi]] of Object.entries(TIMER_LIMITS)) if (Number.isFinite(s[k])) S[k] = Math.min(hi, Math.max(lo, Math.round(s[k])));
+      for (const k of ['autoBreaks', 'autoFocus']) if (typeof s[k] === 'boolean') S[k] = s[k];
+      timerSettingsSeen = JSON.stringify(timerSettings());
+      save('settings', S);
+      if (!timer.adopt(state)) {
+        if (timer.state.type !== S.timerType) timer.setType(S.timerType);
+        else timer.refreshDurations();
+      }
+      refreshDurationFields(); refreshSettingToggles();
+      const ty = $('#panel-settings select[data-key="timerType"]');
+      if (ty) ty.value = S.timerType;
+      renderTimer();
+    } finally { applyingDevice = false; }
+  },
+});
 const scenes = new SceneRenderer($('#scene-canvas'), $('#scene-img'), $('#scene-vid'), $('#scene-fx'));
 const room = new Room({ verifyPeer: () => Promise.reject(new Error('not ready')), getToken: () => null });
 
@@ -526,9 +559,9 @@ function tickBottle(i) {
   else if (S.waterRemind) buddy.setWater(true); // you just drank, so she waits a while before asking
 }
 let waterWas = waterToday().ml;
-waterEvents.addEventListener('change', () => {
+waterEvents.addEventListener('change', (e) => {
   const { ml } = waterToday();
-  if (waterWas < WATER_GOAL_ML && ml >= WATER_GOAL_ML) {
+  if (waterWas < WATER_GOAL_ML && ml >= WATER_GOAL_ML && e.detail?.local !== false) { // not again for a count from your other device
     toast(`${fmtLitres(WATER_GOAL_ML)} L of water today — goal reached 💧`, { timeout: 6000 });
     floatEmoji('💧', 6);
   }
@@ -602,8 +635,9 @@ $('#t-toggle').addEventListener('click', () => { sound.ensure(); timer.toggle();
 $('#t-reset').addEventListener('click', () => {
   accrue();
   const task = sessionTask();
+  const sid = timer.state.sid;
   const swMin = timer.reset();
-  if (swMin >= 1) { addSession(swMin, task?.text); toast(`Saved ${fmtDuration(swMin)} of focus`); renderStats(); }
+  if (swMin >= 1) { addSession(swMin, task?.text, sid); toast(`Saved ${fmtDuration(swMin)} of focus`); renderStats(); }
 });
 $('#t-skip').addEventListener('click', () => timer.skip());
 $$('#phase-tabs button').forEach((b) => b.addEventListener('click', () => timer.setPhase(b.dataset.phase)));
@@ -693,12 +727,12 @@ timerEl.addEventListener('pointerup', (e) => {
 });
 timerEl.title = 'Double-click to change the length';
 
-timer.on('complete', ({ phase, minutes, type }) => {
+timer.on('complete', ({ phase, minutes, type, sid }) => {
   sound.alert(S.alert, S.alertVolume);
   accrue();
   const cur = sessionTask();
   if (phase === 'focus' || type === 'countdown') {
-    addSession(minutes, cur?.text);
+    addSession(minutes, cur?.text, sid);
     if (cur && type === 'pomodoro') cur.spent += 1;
     flushTaskTime(); saveTasks(); renderTasks();
     toast(`Focus session complete — ${fmtDuration(minutes)} logged. Take a breather ☕`, { timeout: 6000 });
@@ -712,16 +746,18 @@ timer.on('complete', ({ phase, minutes, type }) => {
   }
   renderStats();
 });
-timer.on('partial', ({ minutes }) => {
+timer.on('partial', ({ minutes, sid }) => {
   accrue();
-  addSession(minutes, sessionTask()?.text);
+  addSession(minutes, sessionTask()?.text, sid);
   toast(`Logged ${fmtDuration(minutes)} of focus`);
   renderStats();
 });
 let sessionKey = '';
+const TOUCHES = ['start', 'pause', 'reset', 'skip', 'phase', 'length', 'type', 'durations'];
 timer.on('change', ({ source, action }) => {
   accrue();
   saveTimer();
+  if (source === 'local' && !applyingDevice && TOUCHES.includes(action)) timerTouched(); // your other devices follow
   // a new session (or a restarted one) starts a fresh tally of which task it went to
   const st = timer.state, key = `${st.type}/${st.phase}/${st.cycle}`;
   if (key !== sessionKey || ['reset', 'phase', 'type', 'length'].includes(action)) sessionMs = {};
@@ -729,7 +765,7 @@ timer.on('change', ({ source, action }) => {
   if (tasksDirty) { tasksDirty = false; saveTasks(); }
   renderTaskTimes();
   renderTimer(); updateMini();
-  if (source === 'local' && syncOn && room.connected) {
+  if ((source === 'local' || source === 'device') && syncOn && room.connected) {
     // after a natural finish, the room host is the source of truth for what comes next
     if (!(action === 'complete' && room.role !== 'host')) room.send({ t: 'timer', snap: timer.snapshot(), action });
   }
@@ -1179,10 +1215,11 @@ const ago = (t) => {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 };
 
-// whose tasks and focus log these are, and whether they've reached their Google account yet
-// (the same row sits in Focus stats and in Tasks)
+// whose tasks, focus log, timer and water these are, and whether they've reached their Google
+// account yet (the same row sits in Focus stats, Tasks and Settings)
+const SYNCED = 'tasks, focus log, timer and water';
 function renderSyncRow() {
-  for (const box of [$('#stats-sync'), $('#task-sync')]) if (box) syncRow(box);
+  for (const box of [$('#stats-sync'), $('#task-sync'), $('#settings-sync')]) if (box) syncRow(box);
 }
 function syncRow(box) {
   box.innerHTML = '';
@@ -1195,9 +1232,9 @@ function syncRow(box) {
         h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' }),
         syncStatus.state === 'error' ? h('span', { class: 'sub', text: syncStatus.error }) : null),
       h('button', {
-        class: 'btn small', disabled: busy, title: 'Keep your tasks and focus log in your Google account so they follow you to any device',
+        class: 'btn small', disabled: busy, title: `Keep your ${SYNCED} in your Google account so they follow you to any device. The same account signs you in to study rooms`,
         html: `${icon('cloud')}<span>${busy ? 'Connecting…' : 'Sync with Google'}</span>`,
-        onclick: async () => { if (await signInSync()) toast(`Your tasks and focus log now follow ${logAccount()?.email || 'your account'}`); },
+        onclick: async () => { if (await signInSync()) toast(`Your ${SYNCED} now follow ${logAccount()?.email || 'your account'}`); },
       }),
     );
   } else {
@@ -1207,18 +1244,15 @@ function syncRow(box) {
         : hasUnsynced() ? (at ? `Synced ${ago(at)} · latest changes not uploaded yet` : 'Not synced yet')
           : `Synced ${ago(at)}`;
     box.append(
-      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}`, title: `Your tasks and focus log are kept in ${acct.email}’s Google Drive` },
+      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}`, title: `Your ${SYNCED} are kept in ${acct.email}’s Google Drive, and you join study rooms as ${acct.email}` },
         h('span', { html: icon(hasUnsynced() || syncStatus.state === 'error' ? 'cloud' : 'cloud-check') }),
         h('span', { class: 'who', text: acct.email }), h('span', { class: 'sub', text: state })),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', disabled: busy, html: `${icon('refresh-cw')}<span>Sync now</span>`, onclick: () => syncNow({ interactive: true }) }),
         h('button', {
-          class: 'btn small', disabled: busy, html: `${icon('log-out')}<span>Sign out</span>`, title: 'Stop syncing on this device. Your tasks and log stay in your Google account',
-          onclick: async () => {
-            const { kept } = await signOutSync();
-            toast(kept ? 'Signed out. Some changes hadn’t uploaded yet, so they’re kept here and will sync next time you sign in'
-              : 'Signed out. Your tasks and focus log are safe in your Google account');
-          },
+          class: 'btn small', disabled: busy, html: `${icon('log-out')}<span>Sign out</span>`,
+          title: `Stop syncing on this device and leave any study room. Your ${SYNCED} stay in your Google account`,
+          onclick: signOutGoogle,
         })),
     );
   }
@@ -1312,6 +1346,11 @@ function buildSettingsPanel() {
 
   p.append(
     panelHead('Settings'),
+    ...(syncAvailable() ? [
+      h('h3', { text: 'Google account' }),
+      h('p', { class: 'note', text: `One sign-in for everything: your ${SYNCED} follow your Google account to your other devices, and you join study rooms with it.` }),
+      h('div', { id: 'settings-sync', class: 'stats-sync' }),
+    ] : []),
     h('h3', { text: 'General' }),
     row('Your name', name),
     row('24-hour clock', tog('clock24', renderClock)),
@@ -1354,7 +1393,7 @@ function buildSettingsPanel() {
     row('Sync timers', tog('roomSyncDefault', () => renderRoom()), 'Start, pause and skip together when friends join your room'),
     row('Sync themes', tog('roomThemeSync', () => renderRoom()), 'Your theme changes go to the room, and friends’ come to you'),
     h('h3', { text: 'Your data' }),
-    h('p', { class: 'note', text: 'Settings and themes are saved in this browser only. Back them up to move them to another device. Your tasks and focus log can follow your Google account: press Sync with Google in Tasks or Focus stats.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
+    h('p', { class: 'note', text: 'Themes, sounds and the rest of your settings are saved in this browser only. Back them up to move them to another device. Your tasks, focus log, timer (with its settings) and water can follow your Google account: press Sync with Google above.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
     h('div', { class: 'row', style: { flexWrap: 'wrap' } },
       h('button', {
         class: 'btn small', text: 'Export backup', onclick: () => {
@@ -1518,6 +1557,9 @@ function onSignedIn(token) {
   try { if (decodeJwt(token).payload.nonce !== roomNonce) { toast('That sign-in was for a different room — please try again'); return; } } catch { return; }
   myToken = token;
   try { sessionStorage.setItem(tokenKey(pending?.code || room.code), token); } catch { /* private mode */ }
+  // one Google account for everything: rooms, and what syncs (tasks, focus log, timer, water)
+  const who = profileFromToken(token);
+  if (who?.email && adoptAccount(who)) toast(`Signed in as ${who.email}. Press Sync now in Tasks or Focus stats to bring in that account’s tasks and focus log`, { timeout: 7000 });
   if (pending) { const p = pending; pending = null; enterRoom(p.code, p.secret); }
   else if (needReauth) { needReauth = false; room.setToken(); }
   renderRoom();
@@ -1525,6 +1567,7 @@ function onSignedIn(token) {
 
 async function mountSignIn(el) {
   if (!el) return;
+  setSignInHint(logAccount()?.email);
   try { await renderSignIn(el, roomNonce, onSignedIn); } catch (e) {
     el.innerHTML = '';
     el.append(h('p', { class: 'note', text: e.message || 'Google sign-in couldn’t load. Check your connection and try again.' }));
@@ -1546,6 +1589,8 @@ async function startRoom(code, secret) {
   pending = { code, secret };
   if (openId !== 'room') openPanel('room');
   renderRoom();
+  // already signed in to sync: Google can often sign you in to the room with that account at once
+  if (logAccount()) { setSignInHint(logAccount().email); promptSignIn(roomNonce, onSignedIn).catch(() => {}); }
 }
 
 function enterRoom(code, secret) {
@@ -1562,12 +1607,17 @@ function leaveRoom() {
   renderRoom(); updateChip();
 }
 
-function signOutGoogle() {
-  leaveRoom();
+/** one sign-out for everything: leaves the room and stops syncing on this device */
+async function signOutGoogle() {
+  if (room.connected || pending) leaveRoom();
   myToken = null;
   try { Object.keys(sessionStorage).filter((k) => k.startsWith('focusroom:token:')).forEach((k) => sessionStorage.removeItem(k)); } catch { /* noop */ }
   signOut();
-  toast('Signed out of Google on focusroom');
+  renderRoom();
+  const had = !!logAccount();
+  const { kept } = await signOutSync();
+  toast(kept ? 'Signed out. Some changes hadn’t uploaded yet, so they’re kept here and will sync next time you sign in'
+    : had ? 'Signed out. Your tasks, focus log, timer and water are safe in your Google account' : 'Signed out of Google on focusroom');
 }
 
 function inviteLink() {
@@ -1800,6 +1850,7 @@ room.on('member-left', (m, reason) => {
 room.on('need-token', () => {
   needReauth = true;
   toast('Your Google sign-in expired — sign in again to reconnect');
+  setSignInHint(logAccount()?.email || me()?.email);
   promptSignIn(roomNonce, onSignedIn).catch(() => {});
   if (openId !== 'room') openPanel('room');
   renderRoom();
@@ -2458,7 +2509,18 @@ function openPanel(id) {
     // fetch tasks added on other devices (a click, so Google's pop-up may open, as for stats)
     if (logAccount()) syncNow({ interactive: hasUnsynced() || Date.now() - lastSyncAt() > 15 * 60e3 });
   }
+  if (id === 'settings') renderSyncRow();
   poke();
+}
+// signed in to sync on a fresh page: Google's access starts out closed (it needs a click),
+// so offer one click to pick up the timer, tasks and water from your other devices
+if (syncAvailable() && logAccount()) {
+  setTimeout(() => {
+    if (!logAccount() || lastSyncAt() > Date.now() - 10 * 60e3 || syncStatus.state === 'syncing') return; // just reloaded: no need
+    toast(`Bring in your timer, tasks and water from ${logAccount()?.email || 'your Google account'}?`, {
+      timeout: 9000, action: { label: 'Sync now', fn: () => syncNow({ interactive: true }) },
+    });
+  }, 1800);
 }
 $$('#dock [data-panel]').forEach((b) => b.addEventListener('click', () => openPanel(b.dataset.panel)));
 document.addEventListener('pointerdown', (e) => {

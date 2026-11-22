@@ -1,13 +1,21 @@
-import { Emitter } from './util.js?v=20261121d';
+import { Emitter, uid } from './util.js?v=20261121e';
+
+/** the id of the run that follows this one: worked out, not random, so devices agree on it */
+function nextSid(sid) {
+  let h = 2166136261;
+  for (const c of `${sid}>`) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return `${(h >>> 0).toString(36)}${String(sid).slice(0, 3)}`.replace(/[^\w-]/g, '').padEnd(6, '0').slice(0, 12);
+}
 
 /**
  * Timer engine. Time is tracked with absolute end timestamps so it survives
- * background-tab throttling and can be synced to a friend.
+ * background-tab throttling and can be synced to a friend or to your other devices.
  *
  * events:
  *   'change'   ({source:'local'|'remote', action})
- *   'complete' ({phase, minutes, type})
- *   'partial'  ({minutes})  focus time banked when a focus session is skipped
+ *   'complete' ({phase, minutes, type, sid})
+ *   'partial'  ({minutes, sid})  focus time banked when a focus session is skipped
+ * sid names one run of one phase, so the log counts it once however many of your devices showed it.
  */
 export class Timer extends Emitter {
   constructor(getSettings) {
@@ -26,6 +34,7 @@ export class Timer extends Emitter {
       swElapsedMs: 0,
       ranMs: 0,   // time actually run on OUR clock in the current phase (used for logging)
       runAt: 0,
+      sid: uid(10), // this run of this phase: your devices log it once between them, however many showed it
     };
     this.state.totalMs = this.state.remainingMs = this.phaseMs(this.state.phase);
   }
@@ -53,7 +62,7 @@ export class Timer extends Emitter {
 
   /** ms this phase has really been running on this device */
   ran(now = Date.now()) { const st = this.state; return st.ranMs + (st.running ? Math.max(0, now - st.runAt) : 0); }
-  _resetRun(now = Date.now()) { this.state.ranMs = 0; this.state.runAt = now; }
+  _resetRun(now = Date.now(), sid = uid(10)) { this.state.ranMs = 0; this.state.runAt = now; this.state.sid = sid; }
 
   _changed(action, source = 'local') { this.emit('change', { source, action }); }
 
@@ -105,7 +114,7 @@ export class Timer extends Emitter {
     if (st.type !== 'pomodoro') { this.reset(); return; }
     if (st.phase === 'focus') {
       const doneMin = Math.min(st.totalMs - this.value(), this.ran()) / 60000;
-      if (doneMin >= 1) this.emit('partial', { minutes: doneMin });
+      if (doneMin >= 1) this.emit('partial', { minutes: doneMin, sid: st.sid });
     }
     this._advance(false);
     this._changed('skip');
@@ -129,7 +138,7 @@ export class Timer extends Emitter {
     // focus already done in this session still counts
     if (st.type === 'pomodoro' && st.phase === 'focus') {
       const doneMin = Math.min(st.totalMs - this.value(now), this.ran(now)) / 60000;
-      if (doneMin >= 1) this.emit('partial', { minutes: doneMin });
+      if (doneMin >= 1) this.emit('partial', { minutes: doneMin, sid: st.sid });
     }
     st.totalMs = st.remainingMs = Math.round(ms);
     st.running = false;
@@ -176,7 +185,8 @@ export class Timer extends Emitter {
     }
     st.totalMs = st.remainingMs = this.phaseMs(st.phase);
     st.running = false;
-    this._resetRun();
+    // after a natural finish every device showing this timer works out the same id for the next run
+    this._resetRun(Date.now(), fromComplete ? nextSid(st.sid) : uid(10));
     if (autoStart) { st.endsAt = Date.now() + st.remainingMs; st.running = true; }
   }
 
@@ -185,14 +195,15 @@ export class Timer extends Emitter {
     const st = this.state;
     if (!st.running || st.type === 'stopwatch') return;
     if (Date.now() >= st.endsAt) {
-      const phase = st.phase;
+      const phase = st.phase, sid = st.sid;
       const minutes = Math.min(st.totalMs, this.ran()) / 60000; // only credit time that really passed here
       st.remainingMs = 0;
       if (st.type === 'countdown') {
         st.running = false;
         st.remainingMs = st.totalMs;
+        this._resetRun(Date.now(), nextSid(sid));
       } else this._advance(true);
-      this.emit('complete', { phase, minutes, type: st.type });
+      this.emit('complete', { phase, minutes, type: st.type, sid });
       this._changed('complete');
     }
   }
@@ -228,6 +239,35 @@ export class Timer extends Emitter {
     }
     st.ranMs = s.ranMs + (wasRunning && !keepRunning ? Math.max(0, s.at - s.runAt) : 0);
     st.runAt = keepRunning ? s.runAt : now;
+    st.sid = typeof s.sid === 'string' && /^[\w-]{4,40}$/.test(s.sid) ? s.sid : uid(10);
+    return true;
+  }
+
+  /**
+   * Take the timer over from another of your devices (its persisted() state). A run that
+   * finished over there while this device wasn't looking finishes here on the next tick,
+   * so both end up on the same next phase.
+   */
+  adopt(s, now = Date.now()) {
+    const st = this.state;
+    if (!s || !['pomodoro', 'countdown', 'stopwatch'].includes(s.type)) return false;
+    const before = { ...st };
+    const localRan = this.ran(now);
+    st.type = s.type;
+    // clocks on two devices never quite agree: don't let "saved in the future" throw it out
+    if (!this.restore({ ...s, at: Math.min(Number(s.at) || 0, now) }, { now, maxGapMs: Infinity })) {
+      Object.assign(st, before);
+      return false;
+    }
+    if (s.running === true && s.type !== 'stopwatch' && s.endsAt <= now) {
+      // it ran to the end (maybe with the other device shut): count it, unless that was hours ago
+      const ranThere = now - s.endsAt < 6 * 3600e3 ? s.ranMs + Math.max(0, s.endsAt - s.runAt) : 0;
+      st.running = true; st.endsAt = s.endsAt; st.remainingMs = 0;
+      st.ranMs = Math.max(st.sid === before.sid ? localRan : 0, ranThere); st.runAt = now;
+    } else if (st.sid === before.sid) { // the same run: keep whichever device saw more of it
+      st.ranMs = Math.max(localRan, this.ran(now)); st.runAt = now;
+    }
+    this._changed('device', 'device');
     return true;
   }
 
@@ -251,7 +291,7 @@ export class Timer extends Emitter {
     const before = { running: st.running, type: st.type, phase: st.phase, cycle: st.cycle, totalMs: st.totalMs, left: this.value(now) };
     if (before.running && before.type !== 'stopwatch' && before.left < 2500 &&
         (snap.phase !== before.phase || snap.cycle !== before.cycle || (!snap.running && snap.remainingMs >= snap.totalMs - 1000))) {
-      this.emit('complete', { phase: before.phase, minutes: Math.min(before.totalMs, this.ran(now)) / 60000, type: before.type, viaSync: true });
+      this.emit('complete', { phase: before.phase, minutes: Math.min(before.totalMs, this.ran(now)) / 60000, type: before.type, sid: st.sid, viaSync: true });
     }
     const samePhase = snap.type === st.type && snap.phase === st.phase && snap.cycle === st.cycle;
     if (!samePhase) this._resetRun(now);

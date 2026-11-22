@@ -8,7 +8,7 @@
  * ID), expiry, verified email, and a nonce bound to this specific room, so a
  * token can't be reused anywhere else.
  */
-import { b64u, unb64u, utf8 } from './crypto.js?v=20261121d';
+import { b64u, unb64u, utf8 } from './crypto.js?v=20261121e';
 
 // Public OAuth Web client ID (not a secret). Paste yours here.
 export const GOOGLE_CLIENT_ID = '851506894285-25uvrujj9rt65nuilm5sh22do5aqqiqe.apps.googleusercontent.com';
@@ -110,6 +110,10 @@ export function loadGsi() {
  * Render a "Continue with Google" button bound to a room nonce.
  * onToken(idToken) fires after sign-in. Returns a cleanup function.
  */
+// the Google account already used for sync, so the room sign-in offers that one first
+let hint = '';
+export function setSignInHint(email) { hint = email || ''; }
+
 export async function renderSignIn(container, nonce, onToken) {
   container.innerHTML = '';
   if (TEST) {
@@ -128,6 +132,7 @@ export async function renderSignIn(container, nonce, onToken) {
     nonce,
     callback: (r) => r?.credential && onToken(r.credential),
     auto_select: true,
+    login_hint: hint || undefined,
     cancel_on_tap_outside: false,
     itp_support: true,
     use_fedcm_for_prompt: true,
@@ -141,7 +146,7 @@ export async function promptSignIn(nonce, onToken) {
   if (TEST) { const t = window.__testTokenFor?.(nonce); if (t) onToken(t); return; }
   if (!authConfigured()) return;
   await loadGsi();
-  window.google.accounts.id.initialize({ client_id: CFG.clientId, nonce, callback: (r) => r?.credential && onToken(r.credential), auto_select: true, use_fedcm_for_prompt: true, itp_support: true });
+  window.google.accounts.id.initialize({ client_id: CFG.clientId, nonce, callback: (r) => r?.credential && onToken(r.credential), auto_select: true, login_hint: hint || undefined, use_fedcm_for_prompt: true, itp_support: true });
   window.google.accounts.id.prompt();
 }
 

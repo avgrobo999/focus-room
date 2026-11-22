@@ -1,6 +1,7 @@
 /**
- * Keeps the focus log and the task list in the signed-in person's Google Drive, so they
- * follow their Google account to any device rather than staying in one browser.
+ * Keeps the focus log, the task list, the timer (its settings and where it's up to) and water
+ * drunk in the signed-in person's Google Drive, so they follow their Google account to any
+ * device rather than staying in one browser. The same account signs them in to study rooms.
  *
  * They live in the Drive "app data" folder: a hidden folder only this app can
  * see, not the person's files (the app asks for the drive.appdata scope only).
@@ -9,15 +10,20 @@
  *
  * Syncing merges rather than overwrites: the account's log is the union of every
  * device's sessions, so two devices can't wipe out each other's time, and task lists are
- * merged task by task (see mergeTasks).
+ * merged task by task (see mergeTasks). The timer goes to whichever device you last touched
+ * it on; water goes day by day to the newest count. Timer runs carry an id, so a session shown
+ * on two of your devices at once is logged once.
  */
-import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261121d';
-import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents, getTaskState, setTaskState, mergeTasks, taskEvents } from './store.js?v=20261121d';
+import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261121e';
+import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents, getTaskState, setTaskState, mergeTasks, taskEvents, waterEvents, waterRecord, applyWater, cleanWater } from './store.js?v=20261121e';
+import { dayKey } from './util.js?v=20261121e';
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const SCOPES = `${DRIVE_SCOPE} openid email profile`;
 const FILE = 'focus-log.json';
 const TASK_FILE = 'tasks.json'; // a file of its own, so older copies of the app that only know the log leave it alone
+const STATE_FILE = 'state.json'; // the timer (its settings and where it's up to) and water drunk per day
+const WATER_DAYS = 30;
 const API = 'https://www.googleapis.com';
 
 export class SyncError extends Error {
@@ -34,8 +40,64 @@ let fileId = null;
 let taskFileId = null;
 let busy = null;
 
+let stateFileId = null;
+
 let rev = 0; // bumps whenever a session is saved
 let taskRev = 0; // ...and whenever the tasks change
+let stateRev = 0; // ...and the timer or the water
+
+/* ---------- the timer and water, shared between your devices ---------- */
+// The app tells us how to read and set its timer. 'timerAt' is when you last touched the
+// timer on this device; the newest touch on any device wins.
+let timerHooks = null;
+/** hooks: {get: () => ({settings, state}), apply: ({settings, state}) => void} */
+export function registerTimerSync(hooks) { timerHooks = hooks; }
+/** call when you change the timer here (start, pause, a new length, its settings...) */
+export function timerTouched() {
+  save('timerAt', Math.max(Date.now(), (load('timerAt', 0) || 0) + 1));
+  stateChanged();
+}
+function cleanDays(days) {
+  const out = {};
+  const cutoff = dayKey(new Date(Date.now() - WATER_DAYS * 864e5));
+  for (const [day, w] of Object.entries(days && typeof days === 'object' ? days : {})) {
+    const c = cleanWater({ ...w, day });
+    if (c && day >= cutoff) out[day] = { n: c.n, ml: c.ml, at: c.at };
+  }
+  return out;
+}
+/** merge what Drive has with this device; returns the body Drive should hold */
+function mergeState(raw) {
+  const out = { v: 1 };
+  // timer: the newer side wins outright
+  const rt = raw?.timer && typeof raw.timer === 'object' && Number.isFinite(raw.timer.at) ? raw.timer : null;
+  const localAt = load('timerAt', 0) || 0;
+  if (rt && rt.at > localAt && timerHooks) {
+    save('timerAt', rt.at);
+    try { timerHooks.apply(rt); } catch (e) { console.warn('timer from another device', e); }
+    out.timer = rt;
+  } else if (rt && rt.at === localAt) out.timer = rt; // Drive has our last change already
+  else if (timerHooks && localAt) out.timer = { at: localAt, ...timerHooks.get() };
+  else if (rt) out.timer = rt;
+  // water: day by day, the newer count wins
+  const days = cleanDays(raw?.water?.days);
+  const mine = waterRecord();
+  const theirs = days[dayKey()];
+  if (theirs && applyWater({ ...theirs, day: dayKey() })) { /* took theirs */ } else if (mine && (!theirs || mine.at > theirs.at)) days[mine.day] = { n: mine.n, ml: mine.ml, at: mine.at };
+  out.water = { days };
+  return out;
+}
+let stateTimer = 0;
+function stateChanged() {
+  stateRev++;
+  const acct = logAccount();
+  if (!acct) return;
+  if (!meta(acct.email).stateDirty) setMeta(acct.email, { stateDirty: true });
+  if (!tokenValid()) return;
+  clearTimeout(stateTimer);
+  stateTimer = setTimeout(async () => { if (busy) await busy; if (tokenValid()) syncNow(); }, 1500);
+}
+waterEvents.addEventListener('change', (e) => { if (e.detail?.local !== false) stateChanged(); });
 // per account: when it last synced, and whether this device has sessions or task changes Drive hasn't got yet
 const meta = (email = logAccount()?.email) => (email ? load(`logSync:${email}`, {}) : {});
 const setMeta = (email, m) => save(`logSync:${email}`, { ...meta(email), ...m });
@@ -132,7 +194,7 @@ const mock = {
   async create(name, body) {
     const id = `${tokenEmail}/${name}`;
     const d = this.db(); d[id] = body; this.put(d);
-    (window.__syncWrites ||= []).push(name === FILE ? body.log.length : `tasks:${body.tasks.length}`);
+    (window.__syncWrites ||= []).push(name === FILE ? body.log.length : name === TASK_FILE ? `tasks:${body.tasks.length}` : `state:${body.timer?.at || 0}`);
     return id;
   },
   async update(id, body) { return this.create(id.slice(id.indexOf('/') + 1), body); },
@@ -149,7 +211,7 @@ async function ensureToken(interactive) {
   const me = await drive.me();
   if (!me?.email || me.email_verified === false) throw new SyncError('no-email', 'Couldn’t read your Google account’s email');
   const email = String(me.email).toLowerCase();
-  if (email !== tokenEmail) { fileId = null; taskFileId = null; }
+  if (email !== tokenEmail) { fileId = null; taskFileId = null; stateFileId = null; }
   tokenEmail = email;
   // picked a different account in the Google pop-up: switch to that account's log
   if (email !== acct?.email) useAccount({ email, name: String(me.name || email).slice(0, 60), picture: me.picture || '' });
@@ -169,8 +231,8 @@ export function syncNow({ interactive = false } = {}) {
       if (!logAccount() && !interactive) return false;
       emit('syncing');
       if (!(await ensureToken(interactive))) { emit('idle'); return false; }
-      let logDone = false, tasksDone = false;
-      for (let pass = 0; pass < 2 && !(logDone && tasksDone); pass++) {
+      let logDone = false, tasksDone = false, stateDone = false;
+      for (let pass = 0; pass < 2 && !(logDone && tasksDone && stateDone); pass++) {
         if (!logDone) {
           fileId ||= await drive.find(FILE);
           const raw = fileId ? (await drive.read(fileId))?.log : [];
@@ -199,8 +261,21 @@ export function syncNow({ interactive = false } = {}) {
           }
           tasksDone = taskRev === startRev;
         }
+        if (!stateDone) {
+          stateFileId ||= await drive.find(STATE_FILE);
+          const raw = stateFileId ? await drive.read(stateFileId) : null;
+          const startRev = stateRev;
+          const merged = mergeState(raw); // may set the timer and water here; nothing awaits in between
+          const was = raw ? JSON.stringify({ v: raw.v, timer: raw.timer, water: { days: cleanDays(raw.water?.days) } }) : '';
+          if (JSON.stringify(merged) !== was) {
+            const body = { ...merged, updated: Date.now() };
+            if (stateFileId) await drive.update(stateFileId, body);
+            else stateFileId = await drive.create(STATE_FILE, body);
+          }
+          stateDone = stateRev === startRev;
+        }
       }
-      setMeta(tokenEmail, { at: Date.now(), ...(logDone ? { dirty: false } : {}), ...(tasksDone ? { tasksDirty: false } : {}) });
+      setMeta(tokenEmail, { at: Date.now(), ...(logDone ? { dirty: false } : {}), ...(tasksDone ? { tasksDirty: false } : {}), ...(stateDone ? { stateDirty: false } : {}) });
       emit('idle');
       return true;
     } catch (e) {
@@ -229,7 +304,7 @@ export async function signOutSync() {
   if (anyUnsynced() && tokenValid()) await syncNow();
   const kept = anyUnsynced(); // never throw away sessions or tasks that haven't reached Drive yet
   if (!kept) { dropAccountLog(acct.email); try { localStorage.removeItem(`focusroom:v1:logSync:${acct.email}`); } catch { /* ignore */ } }
-  token = null; tokenExp = 0; tokenEmail = null; fileId = null;
+  token = null; tokenExp = 0; tokenEmail = null; fileId = null; taskFileId = null; stateFileId = null;
   useAccount(null);
   emit('idle');
   return { kept };
@@ -259,6 +334,26 @@ taskEvents.addEventListener('saved', (e) => {
   clearTimeout(taskTimer);
   taskTimer = setTimeout(async () => { if (busy) await busy; if (tokenValid()) syncNow(); }, 2500);
 });
+
+/**
+ * Signed in to a study room with Google: that account is the one everything syncs to.
+ * Switching account here starts on that account's data; Drive catches up on the next sync
+ * (which needs a click, as Google's room sign-in can't hand out Drive access).
+ */
+export function adoptAccount(profile) {
+  const email = String(profile?.email || '').toLowerCase();
+  if (!email || logAccount()?.email === email) return false;
+  token = null; tokenExp = 0; tokenEmail = null; fileId = null; taskFileId = null; stateFileId = null;
+  useAccount({ email, name: String(profile.name || email).slice(0, 60), picture: profile.picture || '' });
+  emit('idle');
+  return true;
+}
+
+// while Google's access lasts, look for changes from your other devices every so often,
+// and as soon as you come back to this tab
+const pollIfLive = () => { if (tokenValid() && logAccount() && document.visibilityState === 'visible') syncNow(); };
+setInterval(pollIfLive, 45e3);
+document.addEventListener('visibilitychange', pollIfLive);
 
 // signed in already: fetch Google's script now so a later click can open its pop-up straight away
 if (logAccount() && !TEST && authConfigured()) loadGsi().catch(() => {});

@@ -9,7 +9,7 @@
  * ordinary video picture-in-picture: still always on top, with play/pause standing in for
  * start/pause and next-track for skip.
  */
-import { icon } from './icons.js?v=20261121d';
+import { icon } from './icons.js?v=20261121e';
 
 const docPip = () => 'documentPictureInPicture' in window && window.isSecureContext;
 const videoPip = () => !!document.pictureInPictureEnabled && typeof HTMLCanvasElement.prototype.captureStream === 'function'

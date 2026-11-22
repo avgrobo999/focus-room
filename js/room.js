@@ -17,8 +17,8 @@
  * in the room, and forwards messages between them (re-encrypted per link).
  * If the anchor leaves, the others reconnect and one of them takes over.
  */
-import { Emitter, uid, netLog, pathOf } from './util.js?v=20261121d';
-import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261121d';
+import { Emitter, uid, netLog, pathOf } from './util.js?v=20261121e';
+import { deriveRoomKey, seal, unseal, b64u, randomBytes, sha256hex } from './crypto.js?v=20261121e';
 
 const ID_PREFIX = 'focusroom-v3-'; // + hash(code, secret): the visible code alone can't find or squat the room
 export const MAX_PEOPLE = 4;

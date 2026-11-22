@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261121d';
+import { dayKey, uid } from './util.js?v=20261121e';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -79,16 +79,34 @@ export const WATER_GOAL_ML = 3000;
 export const BOTTLE_ML = 500;
 export const waterEvents = new EventTarget(); // 'change' when today's water changes
 
+// 'water' also carries at (when it last changed), so your devices can tell whose count is newer
+export function cleanWater(w) {
+  if (!w || typeof w !== 'object' || typeof w.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(w.day)) return null;
+  const num = (v, hi) => (Number.isFinite(v) && v > 0 ? Math.min(hi, Math.round(v)) : 0);
+  return { day: w.day, n: num(w.n, 999), ml: num(w.ml, 20000), at: num(w.at, Date.now() + 864e5) };
+}
+/** today's record as stored here ({day, n, ml, at}), or null if nothing yet today */
+export function waterRecord() {
+  const w = cleanWater(load('water', null));
+  return w?.day === dayKey() ? w : null;
+}
 export function waterToday() {
-  const w = load('water', null);
-  const num = (v) => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
-  return w?.day === dayKey() ? { n: num(w.n), ml: num(w.ml) } : { n: 0, ml: 0 };
+  const w = waterRecord();
+  return w ? { n: w.n, ml: w.ml } : { n: 0, ml: 0 };
 }
 function setWater(patch) {
-  const w = { day: dayKey(), ...waterToday(), ...patch };
+  const w = { day: dayKey(), ...waterToday(), ...patch, at: Math.max(Date.now(), (waterRecord()?.at || 0) + 1) };
   save('water', w);
-  waterEvents.dispatchEvent(new Event('change'));
+  waterEvents.dispatchEvent(new CustomEvent('change', { detail: { local: true } }));
   return w;
+}
+/** today's water from another of your devices: taken if it changed more recently than ours */
+export function applyWater(rec) {
+  const w = cleanWater(rec), mine = waterRecord();
+  if (!w || w.day !== dayKey() || (mine && mine.at >= w.at)) return false;
+  save('water', w);
+  waterEvents.dispatchEvent(new CustomEvent('change', { detail: { local: false } }));
+  return true;
 }
 /** set how much you've drunk today; returns the new total in ml */
 export function setWaterMl(ml) { return setWater({ ml: Math.max(0, Math.min(20000, Math.round(ml))) }).ml; }
@@ -230,16 +248,22 @@ export function cleanEntry(s) {
   if (!Number.isFinite(ts) || ts < 1.5e12 || ts > Date.now() + 864e5) return null;
   if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
   if (!Number.isFinite(min) || min <= 0 || min > 24 * 60) return null;
-  return { ts, day, min, task: typeof task === 'string' ? task.slice(0, 200) : '' };
+  const e = { ts, day, min, task: typeof task === 'string' ? task.slice(0, 200) : '' };
+  if (typeof s.sid === 'string' && /^[\w-]{4,40}$/.test(s.sid)) e.sid = s.sid;
+  return e;
 }
 
-// union of logs; a session is the same session if it ended at the same moment with the same length
+// union of logs; a session is the same session if it has the same id (the same timer run, shown
+// on two of your devices: kept once, with the longer time), or else ended at the same moment with the same length
 export function mergeLogs(...logs) {
   const all = new Map();
   for (const log of logs) {
     for (const raw of Array.isArray(log) ? log : []) {
       const s = cleanEntry(raw);
-      if (s) all.set(`${s.ts}:${s.min}`, s);
+      if (!s) continue;
+      const k = s.sid ? `sid:${s.sid}` : `${s.ts}:${s.min}`;
+      const o = all.get(k);
+      if (!o || s.min > o.min || (s.min === o.min && s.ts < o.ts)) all.set(k, s);
     }
   }
   return prune([...all.values()].sort((a, b) => a.ts - b.ts));
@@ -271,9 +295,11 @@ export function dropAccountLog(email) {
   try { ['log', 'tasks', 'taskMeta'].forEach((k) => localStorage.removeItem(PREFIX + `${k}:${email}`)); } catch { /* ignore */ }
 }
 
-export function addSession(min, task) {
+export function addSession(min, task, sid) {
   if (min < 0.5) return;
-  setLog([...getLog(), { ts: Date.now(), day: dayKey(), min: Math.round(min * 10) / 10, task: task || '' }]);
+  const e = { ts: Date.now(), day: dayKey(), min: Math.round(min * 10) / 10, task: task || '' };
+  if (sid) e.sid = sid;
+  setLog(mergeLogs(getLog(), [e]));
   logEvents.dispatchEvent(new Event('added'));
 }
 
