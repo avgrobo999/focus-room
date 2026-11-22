@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261121b';
+import { dayKey, uid } from './util.js?v=20261121c';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -72,6 +72,29 @@ export function clientId() {
   if (!id) { id = uid(12); save('clientId', id); }
   return id;
 }
+
+/* ---------- water today ---------- */
+// 'water': {day, n, ml}: n = times you told your buddy you drank, ml = bottles ticked off (500 ml each)
+export const WATER_GOAL_ML = 3000;
+export const BOTTLE_ML = 500;
+export const waterEvents = new EventTarget(); // 'change' when today's water changes
+
+export function waterToday() {
+  const w = load('water', null);
+  const num = (v) => (Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
+  return w?.day === dayKey() ? { n: num(w.n), ml: num(w.ml) } : { n: 0, ml: 0 };
+}
+function setWater(patch) {
+  const w = { day: dayKey(), ...waterToday(), ...patch };
+  save('water', w);
+  waterEvents.dispatchEvent(new Event('change'));
+  return w;
+}
+/** set how much you've drunk today; returns the new total in ml */
+export function setWaterMl(ml) { return setWater({ ml: Math.max(0, Math.min(20000, Math.round(ml))) }).ml; }
+/** one more "I drank water"; returns today's count */
+export function countSip() { return setWater({ n: waterToday().n + 1 }).n; }
+export const fmtLitres = (ml) => String(+(ml / 1000).toFixed(2));
 
 /* ---------- focus stats ---------- */
 // log: [{ts, day, min, task}]

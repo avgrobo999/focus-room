@@ -1,13 +1,14 @@
 /**
  * Your buddy: a little girl who runs in when a focus session ends to blow you a kiss, give you
  * a hug or wink at you (picked at random), and brings you a glass of water every 15–20 minutes.
- * Snooze the water and she's sad; tick it off and she jumps for joy.
+ * Snooze the water and she's sad; tick it off and she jumps for joy. Finishing a 500 ml bottle
+ * can be ticked off right in her bubble, which fills the water bar (3 L a day).
  *
  * She shows on the page, where you can drag her anywhere, and in the pop-out timer when it's open
  * (so you still see her while the pop-out sits on top of your other apps).
  */
-import { h, pick, rand, clamp, dayKey } from './util.js?v=20261121b';
-import { load, save } from './store.js?v=20261121b';
+import { h, pick, rand, clamp } from './util.js?v=20261121c';
+import { WATER_GOAL_ML, BOTTLE_ML, waterToday, setWaterMl, countSip, fmtLitres } from './store.js?v=20261121c';
 
 const MIN = 60000;
 const SNOOZE_MIN = 5;
@@ -101,6 +102,8 @@ const CSS = `
 .bd-btns svg{width:15px;height:15px}
 .bd-yes{background:#22b466;color:#fff}
 .bd-yes:hover{background:#1c9e59}
+.bd-sip{background:#d9efff;color:#1d5f8f}
+.bd-sip:hover{background:#c6e6fd}
 .bd-no{background:#efe9f7;color:#4a3d63}
 .bd-no:hover{background:#e3daf2}
 
@@ -277,7 +280,8 @@ class Actor {
     const reply = (v) => this.buddy.reply(v);
     if (say.water) {
       el.append(h('div', { class: 'bd-btns' },
-        h('button', { class: 'bd-yes', html: `${CHECK}<span>I drank water</span>`, onclick: () => reply('drank') }),
+        h('button', { class: 'bd-yes', title: 'Ticks a bottle off your water bar', html: `${CHECK}<span>Finished a ${BOTTLE_ML} ml bottle</span>`, onclick: () => reply('bottle') }),
+        h('button', { class: 'bd-sip', text: 'I had some water', onclick: () => reply('drank') }),
         h('button', { class: 'bd-no', text: `Snooze ${SNOOZE_MIN} min`, onclick: () => reply('snooze') })));
     } else if (say.done) {
       el.append(h('div', { class: 'bd-btns' }, h('button', { class: 'bd-yes', html: `${CHECK}<span>Done</span>`, onclick: () => reply('done') })));
@@ -486,10 +490,18 @@ export class Buddy {
     this.set({ say: { text: pick(ASKS), water: true } });
     const ans = await this.waitReply(IGNORE_MS);
     this.waterWaiting = false;
-    if (ans === 'drank') {
+    if (ans === 'drank' || ans === 'bottle' || ans === 'bottled') {
       this.nextWater = Date.now() + nextWaterIn();
-      const n = this.countGlass();
-      this.set({ face: 'happy', pose: 'cheer', jump: true, say: { text: n > 1 ? `Yay! That’s glass #${n} today 💖` : 'Yay! First glass today 💖' } });
+      let text;
+      if (ans === 'drank') {
+        const n = countSip();
+        text = n > 1 ? `Yay! That’s glass #${n} today 💖` : 'Yay! First glass today 💖';
+      } else {
+        // 'bottled': already ticked off on the water bar while she was asking
+        const ml = ans === 'bottle' ? setWaterMl(waterToday().ml + BOTTLE_ML) : waterToday().ml;
+        text = ml >= WATER_GOAL_ML ? `You did it! ${fmtLitres(ml)} L today 🎉💖` : `Yay! ${fmtLitres(ml)} of ${fmtLitres(WATER_GOAL_ML)} L today 💖`;
+      }
+      this.set({ face: 'happy', pose: 'cheer', jump: true, say: { text } });
       this.burst('hearts', 14);
       await this.sleep(2800);
       this.set({ jump: false, face: 'smile', pose: 'water' });
@@ -501,13 +513,6 @@ export class Buddy {
       await this.sleep(2800);
       await this.leave(true);
     }
-  }
-  countGlass() {
-    const today = dayKey();
-    const w = load('water', null);
-    const n = (w?.day === today ? w.n : 0) + 1;
-    save('water', { day: today, n });
-    return n;
   }
 
   /** bring her out so you can drag her where you want her */

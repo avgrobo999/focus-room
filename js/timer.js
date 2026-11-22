@@ -1,4 +1,4 @@
-import { Emitter } from './util.js?v=20261121b';
+import { Emitter } from './util.js?v=20261121c';
 
 /**
  * Timer engine. Time is tracked with absolute end timestamps so it survives
@@ -195,6 +195,40 @@ export class Timer extends Emitter {
       this.emit('complete', { phase, minutes, type: st.type });
       this._changed('complete');
     }
+  }
+
+  /** everything needed to pick the timer up again after the page reloads */
+  persisted(now = Date.now()) { return { ...this.state, at: now }; }
+
+  /**
+   * Pick up where a reload left off. Reloaded within maxGapMs, a running timer just keeps
+   * running; after a longer absence it comes back paused at the time it showed when the page went away.
+   */
+  restore(s, { now = Date.now(), maxGapMs = 30000 } = {}) {
+    const st = this.state;
+    const ok = (v) => Number.isFinite(v) && v >= 0;
+    if (!s || typeof s !== 'object' || s.type !== st.type) return false;
+    if (!(st.type === 'pomodoro' ? ['focus', 'short', 'long'] : [st.type]).includes(s.phase)) return false;
+    if (![s.at, s.endsAt, s.remainingMs, s.totalMs, s.cycle, s.swStartedAt, s.swElapsedMs, s.ranMs, s.runAt].every(ok)) return false;
+    if (s.at > now + 5000) return false; // saved "in the future": the clock changed, don't trust it
+    const wasRunning = s.running === true;
+    const keepRunning = wasRunning && now - s.at <= maxGapMs && (s.type === 'stopwatch' || s.endsAt > now);
+    st.phase = s.phase;
+    st.cycle = Math.min(12, s.cycle | 0);
+    st.running = keepRunning;
+    if (s.type === 'stopwatch') {
+      st.swElapsedMs = s.swElapsedMs + (wasRunning && !keepRunning ? Math.max(0, s.at - s.swStartedAt) : 0);
+      st.swStartedAt = keepRunning ? s.swStartedAt : now;
+    } else {
+      if (!(s.totalMs > 0)) return false;
+      st.totalMs = s.totalMs;
+      const left = wasRunning ? Math.max(0, s.endsAt - s.at) : s.remainingMs;
+      st.remainingMs = Math.min(left > 0 ? left : s.totalMs, s.totalMs);
+      st.endsAt = keepRunning ? s.endsAt : 0;
+    }
+    st.ranMs = s.ranMs + (wasRunning && !keepRunning ? Math.max(0, s.at - s.runAt) : 0);
+    st.runAt = keepRunning ? s.runAt : now;
+    return true;
   }
 
   snapshot() {

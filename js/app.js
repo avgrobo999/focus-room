@@ -1,18 +1,18 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121b';
-import { icon } from './icons.js?v=20261121b';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261121b';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121b';
-import { quoteOfTheDay } from './quotes.js?v=20261121b';
-import { Timer } from './timer.js?v=20261121b';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121b';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121b';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121b';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121b';
-import { Ringtone } from './ring.js?v=20261121b';
-import { Popout, popoutSupported } from './popout.js?v=20261121b';
-import { Buddy } from './buddy.js?v=20261121b';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121b';
-import { sha256b64u } from './crypto.js?v=20261121b';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121c';
+import { icon } from './icons.js?v=20261121c';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount, WATER_GOAL_ML, BOTTLE_ML, waterEvents, waterToday, setWaterMl, fmtLitres } from './store.js?v=20261121c';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121c';
+import { quoteOfTheDay } from './quotes.js?v=20261121c';
+import { Timer } from './timer.js?v=20261121c';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121c';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121c';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121c';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121c';
+import { Ringtone } from './ring.js?v=20261121c';
+import { Popout, popoutSupported } from './popout.js?v=20261121c';
+import { Buddy } from './buddy.js?v=20261121c';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121c';
+import { sha256b64u } from './crypto.js?v=20261121c';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -32,6 +32,11 @@ const saveTasks = () => save('tasks', tasks);
 let customScenes = load('customScenes', []);
 
 const timer = new Timer(() => S);
+// the timer carries on from where it was when the page is refreshed
+timer.restore(load('timer', null));
+let timerSavedAt = 0;
+const saveTimer = () => { timerSavedAt = Date.now(); save('timer', timer.persisted(timerSavedAt)); };
+addEventListener('pagehide', saveTimer);
 const scenes = new SceneRenderer($('#scene-canvas'), $('#scene-img'), $('#scene-vid'), $('#scene-fx'));
 const room = new Room({ verifyPeer: () => Promise.reject(new Error('not ready')), getToken: () => null });
 
@@ -460,6 +465,54 @@ const buddy = new Buddy({
   chime: () => { if (S.alert !== 'none') sound.alert('marimba', S.alertVolume * 0.5); },
   notify: (title, body) => notify(title, body),
 });
+
+/* ---------- water bar: six 500 ml bottles to a 3 L day ---------- */
+const WATER_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+const waterEl = $('#water');
+const waterSlots = [];
+for (let i = 0; i < WATER_GOAL_ML / BOTTLE_ML; i++) {
+  const b = h('button', { class: 'water-slot', html: WATER_CHECK, onclick: () => tickBottle(i) });
+  waterSlots.push(b);
+  $('#water-slots').append(b);
+}
+let waterShown = -1;
+function renderWater() {
+  const { ml } = waterToday();
+  if (ml === waterShown) return;
+  waterShown = ml;
+  const done = Math.floor(ml / BOTTLE_ML);
+  waterSlots.forEach((b, i) => {
+    const on = i < done;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+    b.title = on ? 'Untick a bottle' : 'Tick when you finish a 500 ml bottle';
+    b.setAttribute('aria-label', `Bottle ${i + 1} of ${waterSlots.length}`);
+  });
+  waterEl.style.setProperty('--pct', `${Math.min(100, (ml / WATER_GOAL_ML) * 100)}%`);
+  waterEl.classList.toggle('full', ml >= WATER_GOAL_ML);
+  $('#water-amt').textContent = `${fmtLitres(ml)} / ${fmtLitres(WATER_GOAL_ML)} L`;
+  waterEl.title = `Water today: ${fmtLitres(ml)} L of ${fmtLitres(WATER_GOAL_ML)} L`;
+}
+/** an empty bottle ticks one more off; a ticked one takes the last tick back */
+function tickBottle(i) {
+  const { ml } = waterToday();
+  if (i < Math.floor(ml / BOTTLE_ML)) { setWaterMl(ml - BOTTLE_ML); return; }
+  setWaterMl(ml + BOTTLE_ML);
+  if (buddy.waterWaiting) buddy.reply('bottled'); // she was asking: that's her answer
+  else if (S.waterRemind) buddy.setWater(true); // you just drank, so she waits a while before asking
+}
+let waterWas = waterToday().ml;
+waterEvents.addEventListener('change', () => {
+  const { ml } = waterToday();
+  if (waterWas < WATER_GOAL_ML && ml >= WATER_GOAL_ML) {
+    toast(`${fmtLitres(WATER_GOAL_ML)} L of water today — goal reached 💧`, { timeout: 6000 });
+    floatEmoji('💧', 6);
+  }
+  waterWas = ml;
+  renderWater();
+});
+renderWater();
+
 function renderPopout() {
   $('#popout-btn').classList.toggle('active', popout.open);
   if (!popout.open) return;
@@ -644,6 +697,7 @@ timer.on('partial', ({ minutes }) => {
 let sessionKey = '';
 timer.on('change', ({ source, action }) => {
   accrue();
+  saveTimer();
   // a new session (or a restarted one) starts a fresh tally of which task it went to
   const st = timer.state, key = `${st.type}/${st.phase}/${st.cycle}`;
   if (key !== sessionKey || ['reset', 'phase', 'type', 'length'].includes(action)) sessionMs = {};
@@ -2435,6 +2489,7 @@ let lastSec = 0;
 function loop() {
   timer.tick();
   buddy.tick();
+  if (timer.state.running && Date.now() - timerSavedAt > 5000) saveTimer(); // so a reload knows how long the page was away
   if (document.hidden) { renderTitleOnly(); renderPopout(); return; }
   renderTimer();
   const sec = Math.floor(Date.now() / 1000);
@@ -2443,6 +2498,7 @@ function loop() {
     accrue(); renderTaskTimes();
     if (sec % 15 === 0 && tasksDirty) { tasksDirty = false; saveTasks(); }
     renderClock();
+    if (sec % 30 === 0) renderWater(); // a new day starts an empty bar
     if (room.state !== 'idle') { updateChip(); updateFriendCard(); updateRoomHint(); }
   }
 }

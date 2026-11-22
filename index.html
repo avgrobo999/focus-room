@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="fonts/fonts.css">
-  <link rel="stylesheet" href="css/style.css?v=20261121b">
+  <link rel="stylesheet" href="css/style.css?v=20261121c">
 </head>
 <body class="mode-home">
   <div id="bg" aria-hidden="true">
@@ -98,6 +98,11 @@
   </aside>
 
   <footer id="bottom">
+    <div id="water" class="water glass" role="group" aria-label="Water today">
+      <span class="water-drop" aria-hidden="true">💧</span>
+      <div id="water-slots" class="water-slots"></div>
+      <span id="water-amt" class="water-amt">0 / 3 L</span>
+    </div>
     <div id="mode-switch" class="mode-switch glass" role="tablist" aria-label="Mode">
       <button data-mode="ambient" data-icon="flower-2" title="Ambient (1)"><span>Ambient</span></button>
       <button data-mode="home" data-icon="house" title="Home (2)"><span>Home</span></button>
@@ -118,6 +123,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="js/app.js?v=20261121b"></script>
+  <script type="module" src="js/app.js?v=20261121c"></script>
 </body>
 </html>

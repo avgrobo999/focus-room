@@ -228,6 +228,30 @@ body:not(.nav-open) .dock { opacity: 0; visibility: hidden; transform: translate
 .mode-switch button:hover { color: var(--fg); }
 .mode-switch button.active { background: rgba(255,255,255,.9); color: #1a1530; font-weight: 500; }
 
+/* ---------- water bar (bottom left): six 500 ml bottles to tick off, 3 L a day ---------- */
+.water { position: relative; overflow: hidden; margin-right: auto; display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px 0 12px; border-radius: 999px; }
+.water::before { content: ''; position: absolute; inset: 0; width: var(--pct, 0%); background: linear-gradient(90deg, rgba(98,191,248,.28), rgba(98,191,248,.5)); transition: width .6s var(--ease); pointer-events: none; }
+.water > * { position: relative; }
+.water-drop { font-size: 18px; line-height: 1; }
+.water-slots { display: flex; gap: 5px; }
+.water-slot { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--line-strong); color: transparent; transition: background .25s, border-color .25s, transform .15s; }
+.water-slot svg { width: 14px; height: 14px; }
+.water-slot:hover { border-color: #fff; background: var(--hover); color: var(--faint); }
+.water-slot:active { transform: scale(.9); }
+.water-slot.on { background: #62bff8; border-color: #62bff8; color: #0d2b45; }
+.water.full .water-slot.on { background: var(--ok); border-color: var(--ok); }
+.water-amt { font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.water.full .water-amt { color: var(--fg); }
+.dock { max-height: calc(100dvh - var(--nav-top) - var(--menu-w) - 100px); } /* stays clear of the water bar */
+@media (max-width: 760px) {
+  /* phones: the bottom row is taken, so it sits just above it on the right */
+  .water { position: fixed; right: 10px; bottom: calc(62px + env(safe-area-inset-bottom)); margin: 0; height: 40px; gap: 7px; padding: 0 12px 0 9px; }
+  .water-slot { width: 22px; height: 22px; }
+  .water-slot svg { width: 12px; height: 12px; }
+  .water-amt { font-size: 12.5px; }
+}
+@media (max-width: 760px) and (max-height: 500px) { .water-amt { display: none; } }
+
 body.idle #bottom, body.idle #side-nav, body.idle .brand, body.idle .chip { opacity: 0; }
 body.idle { cursor: none; }
 
