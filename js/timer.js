@@ -1,4 +1,4 @@
-import { Emitter } from './util.js?v=20261117d';
+import { Emitter } from './util.js?v=20261121b';
 
 /**
  * Timer engine. Time is tracked with absolute end timestamps so it survives
@@ -119,6 +119,23 @@ export class Timer extends Emitter {
     st.totalMs = st.remainingMs = this.phaseMs(phase);
     this._resetRun();
     this._changed('phase');
+  }
+
+  /** give the current session a new length (typed on the timer), optionally starting it straight away */
+  setLength(ms, { start = false } = {}) {
+    const st = this.state;
+    if (st.type === 'stopwatch' || !(ms > 0)) return;
+    const now = Date.now();
+    // focus already done in this session still counts
+    if (st.type === 'pomodoro' && st.phase === 'focus') {
+      const doneMin = Math.min(st.totalMs - this.value(now), this.ran(now)) / 60000;
+      if (doneMin >= 1) this.emit('partial', { minutes: doneMin });
+    }
+    st.totalMs = st.remainingMs = Math.round(ms);
+    st.running = false;
+    this._resetRun(now);
+    if (start) { st.endsAt = now + st.remainingMs; st.running = true; }
+    this._changed('length');
   }
 
   setType(type) {

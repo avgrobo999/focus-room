@@ -6,8 +6,8 @@
  * She shows on the page, where you can drag her anywhere, and in the pop-out timer when it's open
  * (so you still see her while the pop-out sits on top of your other apps).
  */
-import { h, pick, rand, clamp, dayKey } from './util.js?v=20261117d';
-import { load, save } from './store.js?v=20261117d';
+import { h, pick, rand, clamp, dayKey } from './util.js?v=20261121b';
+import { load, save } from './store.js?v=20261121b';
 
 const MIN = 60000;
 const SNOOZE_MIN = 5;

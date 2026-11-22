@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261117d';
+import { dayKey, uid } from './util.js?v=20261121b';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -47,6 +47,7 @@ export const DEFAULT_SETTINGS = {
   roomSyncDefault: true,
   roomThemeSync: false, // in a study room, send my theme changes and take friends' automatically
   musicSide: false, // music player docked as a sidebar
+  navOpen: true, // the menu on the left is open (on a phone it starts closed)
   pinOnStart: null, // pop the timer out (always on top) when it starts; null = on when installed as an app
   buddyCheer: true, // the little girl runs in to cheer when a focus session ends
   waterRemind: true, // ...and brings a glass of water every 15–20 minutes
@@ -154,6 +155,18 @@ export function statsSummary() {
     if (i > 400) break;
   }
 
+  // focus time per task over the last 7 days (sessions with no task are left out)
+  const weekKeys = new Set(last7.map((d) => d.day));
+  const tasks = new Map();
+  for (const s of log) {
+    const name = (s.task || '').trim();
+    if (!name || !weekKeys.has(s.day)) continue;
+    const r = tasks.get(name.toLowerCase()) || { task: name, min: 0, n: 0 };
+    r.min += s.min; r.n += 1;
+    tasks.set(name.toLowerCase(), r);
+  }
+  const byTask = [...tasks.values()].sort((a, b) => b.min - a.min).slice(0, 8);
+
   const monthPrefix = today.slice(0, 7);
   const monthMin = Object.entries(byDay).filter(([k]) => k.startsWith(monthPrefix)).reduce((a, [, v]) => a + v, 0);
 
@@ -165,6 +178,7 @@ export function statsSummary() {
     totalMin: log.reduce((a, s) => a + s.min, 0),
     streak,
     last7,
+    byTask,
     recent: log.slice(-8).reverse(),
   };
 }

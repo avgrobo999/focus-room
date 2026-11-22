@@ -1,18 +1,18 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261117d';
-import { icon } from './icons.js?v=20261117d';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261117d';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261117d';
-import { quoteOfTheDay } from './quotes.js?v=20261117d';
-import { Timer } from './timer.js?v=20261117d';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261117d';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, LEGACY_SCENES } from './scenes.js?v=20261117d';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261117d';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261117d';
-import { Ringtone } from './ring.js?v=20261117d';
-import { Popout, popoutSupported } from './popout.js?v=20261117d';
-import { Buddy } from './buddy.js?v=20261117d';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261117d';
-import { sha256b64u } from './crypto.js?v=20261117d';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121b';
+import { icon } from './icons.js?v=20261121b';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount } from './store.js?v=20261121b';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121b';
+import { quoteOfTheDay } from './quotes.js?v=20261121b';
+import { Timer } from './timer.js?v=20261121b';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121b';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121b';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121b';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121b';
+import { Ringtone } from './ring.js?v=20261121b';
+import { Popout, popoutSupported } from './popout.js?v=20261121b';
+import { Buddy } from './buddy.js?v=20261121b';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121b';
+import { sha256b64u } from './crypto.js?v=20261121b';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -47,6 +47,25 @@ const currentTask = () => tasks.find((t) => !t.done);
 $$('[data-icon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.icon)));
 // a short name under each dock icon
 $$('#dock [data-label]').forEach((b) => b.append(h('span', { class: 'lbl', text: b.dataset.label })));
+
+/* ---------- the menu on the left: the hamburger opens and closes it ---------- */
+const narrowScreen = () => matchMedia('(max-width: 760px)').matches;
+const navOpen = () => document.body.classList.contains('nav-open');
+function setNav(open, { remember = true } = {}) {
+  document.body.classList.toggle('nav-open', open);
+  const b = $('#menu-btn');
+  b.setAttribute('aria-expanded', String(open));
+  b.setAttribute('aria-label', open ? 'Hide menu' : 'Show menu');
+  b.title = `${open ? 'Hide' : 'Show'} menu (\\)`;
+  // a phone always starts with it closed, so only remember the choice on bigger screens
+  if (remember && !narrowScreen()) { S.navOpen = open; persist(); }
+}
+setNav(S.navOpen !== false && !narrowScreen(), { remember: false });
+$('#menu-btn').addEventListener('click', () => setNav(!navOpen()));
+// on a phone the open menu floats over the page: a tap anywhere else closes it
+document.addEventListener('pointerdown', (e) => {
+  if (narrowScreen() && navOpen() && !e.target.closest('#side-nav')) setNav(false, { remember: false });
+});
 $('#t-reset').innerHTML = icon('rotate-ccw');
 $('#t-skip').innerHTML = icon('skip-forward');
 $('#mf-check').innerHTML = icon('check');
@@ -83,6 +102,13 @@ function panelHead(title, id) {
   return h('div', { class: 'panel-head' },
     h('h2', { text: title }),
     h('button', { class: 'x', title: 'Close (Esc)', html: icon('x'), onclick: () => openPanel(null) }));
+}
+
+// the length fields in settings follow a length typed on the timer
+function refreshDurationFields() {
+  $$('#panel-settings input[type="number"][data-key]').forEach((n) => { n.value = S[n.dataset.key]; });
+  const pre = $('#panel-settings select[data-key="preset"]');
+  if (pre) pre.value = S.preset;
 }
 
 // settings switches show a setting changed somewhere else
@@ -193,6 +219,12 @@ function renderMainFocus() {
   $('#mf-label').textContent = cur ? 'Today’s focus' : 'What’s your main focus today?';
   if (cur) $('#mf-text').textContent = cur.text;
   $('#focus-task-text').textContent = cur ? cur.text : 'Pick a task to focus on';
+  // with a focus already set, you can still jot down what's next
+  const left = tasks.filter((t) => !t.done).length;
+  $('#mf-next').hidden = !cur;
+  $('#mf-all').hidden = left < 2;
+  $('#mf-all').textContent = `+${left - 1} more`;
+  renderTaskTimes();
 }
 $('#mf-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.value.trim()) {
@@ -201,12 +233,22 @@ $('#mf-input').addEventListener('keydown', (e) => {
     e.target.blur();
   }
 });
+$('#mf-more').addEventListener('keydown', (e) => {
+  const v = e.target.value.trim();
+  if (e.key === 'Enter' && v) {
+    addTask(v);
+    toast(`Added “${v.slice(0, 40)}” to your tasks`);
+    e.target.value = '';
+  }
+});
+$('#mf-all').addEventListener('click', () => openPanel('tasks'));
 $('#mf-check').addEventListener('click', () => { const c = currentTask(); if (c) toggleTask(c.id); });
 $('#focus-task').addEventListener('click', () => openPanel('tasks'));
 
 /* ================= tasks ================= */
 function addTask(text, est = 1, top = false) {
-  const t = { id: uid(8), text: text.slice(0, 200), done: false, est, spent: 0 };
+  if (top) accrue(); // the task on top is about to change: settle the time so far first
+  const t = { id: uid(8), text: text.slice(0, 200), done: false, est, spent: 0, ms: 0 };
   if (top) tasks.unshift(t); else tasks.push(t);
   saveTasks(); renderTasks();
 }
@@ -214,12 +256,13 @@ function addTask(text, est = 1, top = false) {
 function toggleTask(id) {
   const t = tasks.find((x) => x.id === id);
   if (!t) return;
+  accrue();
   t.done = !t.done;
   if (t.done) {
     // move finished tasks below the active ones
     tasks = [...tasks.filter((x) => !x.done), ...tasks.filter((x) => x.done)];
     floatEmoji('✨', 4);
-    toast(`Nice work — “${t.text.slice(0, 40)}” done`);
+    toast(`Nice work — “${t.text.slice(0, 40)}” done${t.ms >= 60000 ? ` in ${fmtTaskTime(t.ms)}` : ''}`);
     if (room.connected) room.send({ t: 'event', kind: 'task', text: t.text });
   }
   saveTasks(); renderTasks();
@@ -253,8 +296,11 @@ function renderTasks() {
       h('button', { class: 'tick', html: icon('check'), title: t.done ? 'Mark not done' : 'Mark done', onclick: () => toggleTask(t.id) }),
       textEl,
       t === cur ? h('span', { class: 'now', text: 'Now' }) : null,
-      h('span', { class: 't-meta', title: 'Focus sessions done / estimated', html: `${icon('timer')}${t.spent}/${t.est}` }),
-      h('button', { class: 'icon-btn del', html: icon('trash-2'), title: 'Delete', onclick: () => { tasks = tasks.filter((x) => x.id !== t.id); saveTasks(); renderTasks(); sendStatusSoon(); } }),
+      !t.done && t !== cur ? h('button', { class: 'icon-btn focus-on', html: icon('target'), title: 'Focus on this now', onclick: () => focusOn(t.id) }) : null,
+      h('span', { class: 't-meta' },
+        h('span', { class: 't-time', 'data-time-id': t.id, title: 'Time focused on this task', html: `${icon('clock')}<span>${fmtTaskTime(t.ms)}</span>` }),
+        h('span', { class: 't-sess', title: 'Focus sessions done / estimated', html: `${icon('timer')}${t.spent}/${t.est}` })),
+      h('button', { class: 'icon-btn del', html: icon('trash-2'), title: 'Delete', onclick: () => { accrue(); tasks = tasks.filter((x) => x.id !== t.id); saveTasks(); renderTasks(); sendStatusSoon(); } }),
     );
     li.addEventListener('dragstart', (e) => { dragId = t.id; li.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
     li.addEventListener('dragend', () => { dragId = null; renderTasks(); });
@@ -262,6 +308,7 @@ function renderTasks() {
     li.addEventListener('drop', (e) => {
       e.preventDefault();
       if (!dragId || dragId === t.id) return;
+      accrue();
       const moving = tasks.find((x) => x.id === dragId);
       tasks = tasks.filter((x) => x.id !== dragId);
       tasks.splice(tasks.findIndex((x) => x.id === t.id), 0, moving);
@@ -270,7 +317,8 @@ function renderTasks() {
     list.append(li);
   }
   const done = tasks.filter((t) => t.done).length;
-  $('#task-count').textContent = tasks.length ? `${done} of ${tasks.length} done` : '';
+  const total = tasks.reduce((a, t) => a + (t.ms || 0), 0);
+  $('#task-count').textContent = tasks.length ? `${done} of ${tasks.length} done${total >= 60000 ? ` · ${fmtTaskTime(total)} focused` : ''}` : '';
   $('#task-clear').hidden = !done;
   sendStatusSoon();
 }
@@ -289,9 +337,59 @@ function buildTasksPanel() {
     h('div', { class: 'row between', style: { marginTop: '12px', fontSize: '13px', color: 'var(--muted)' } },
       h('span', { id: 'task-count' }),
       h('button', { class: 'btn small', id: 'task-clear', text: 'Clear completed', onclick: () => { tasks = tasks.filter((t) => !t.done); saveTasks(); renderTasks(); } })),
-    h('p', { class: 'note', text: 'Drag to reorder. Your top unfinished task is your current focus, and completed focus sessions are counted against it.' }),
+    h('p', { class: 'note', text: 'Add as many as you like. Your top unfinished task is your current focus: drag to reorder, or press the target to focus on a task now. Focus time counts towards whichever task is current while the timer runs.' }),
   );
 }
+
+/** put a task on top so it becomes the current focus */
+function focusOn(id) {
+  const t = tasks.find((x) => x.id === id);
+  if (!t || t.done) return;
+  accrue();
+  tasks = [t, ...tasks.filter((x) => x !== t)];
+  saveTasks(); renderTasks();
+  toast(`Now focusing on “${t.text.slice(0, 40)}”`);
+}
+
+/* ---------- time on each task: focus time goes to whichever task is current while it runs ---------- */
+const fmtTaskTime = (ms = 0) => (ms > 0 && ms < 60000 ? '<1m' : fmtDuration(Math.floor((ms || 0) / 60000)));
+const isFocusTime = (st) => st.type === 'stopwatch' || st.type === 'countdown' || st.phase === 'focus';
+let acct = null;     // the timer as it was at the last tally: {running, focus, endsAt, at}
+let sessionMs = {};  // task id → ms in this focus session, so the session is logged under the task it mostly went to
+let tasksDirty = false;
+function accrue(now = Date.now()) {
+  if (acct?.running && acct.focus) {
+    const end = acct.endsAt ? Math.min(now, acct.endsAt) : now; // a countdown stops counting when it runs out
+    const d = Math.max(0, end - acct.at);
+    const cur = currentTask();
+    if (cur && d) { cur.ms = (cur.ms || 0) + d; sessionMs[cur.id] = (sessionMs[cur.id] || 0) + d; tasksDirty = true; }
+  }
+  const st = timer.state;
+  acct = { running: st.running, focus: isFocusTime(st), endsAt: st.type === 'stopwatch' ? 0 : st.endsAt, at: now };
+}
+function flushTaskTime() { accrue(); if (tasksDirty) { tasksDirty = false; saveTasks(); } }
+/** the task this focus session mostly went to (falls back to the current one) */
+function sessionTask() {
+  let best = null, most = 0;
+  for (const [id, ms] of Object.entries(sessionMs)) {
+    const t = tasks.find((x) => x.id === id);
+    if (t && ms > most) { best = t; most = ms; }
+  }
+  return best || currentTask();
+}
+/** refresh the running totals in place (no re-render, so dragging and editing aren't interrupted) */
+function renderTaskTimes() {
+  const cur = currentTask();
+  const live = !!cur && timer.state.running && isFocusTime(timer.state);
+  $('#mf-time').textContent = cur && cur.ms >= 60000 ? fmtTaskTime(cur.ms) : '';
+  $('#focus-task-time').textContent = cur && (cur.ms >= 60000 || live) ? fmtTaskTime(cur.ms) : '';
+  $$('[data-time-id]').forEach((el) => {
+    const t = tasks.find((x) => x.id === el.dataset.timeId);
+    if (t) { el.lastElementChild.textContent = fmtTaskTime(t.ms); el.classList.toggle('live', live && t === cur); }
+  });
+}
+addEventListener('pagehide', flushTaskTime);
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushTaskTime(); });
 
 /* ================= timer ================= */
 const timerEl = $('#timer');
@@ -425,18 +523,107 @@ function updateMini() {
 
 $('#t-toggle').addEventListener('click', () => { sound.ensure(); timer.toggle(); pinIfStarted(); });
 $('#t-reset').addEventListener('click', () => {
+  accrue();
+  const task = sessionTask();
   const swMin = timer.reset();
-  if (swMin >= 1) { addSession(swMin, currentTask()?.text); toast(`Saved ${fmtDuration(swMin)} of focus`); renderStats(); }
+  if (swMin >= 1) { addSession(swMin, task?.text); toast(`Saved ${fmtDuration(swMin)} of focus`); renderStats(); }
 });
 $('#t-skip').addEventListener('click', () => timer.skip());
 $$('#phase-tabs button').forEach((b) => b.addEventListener('click', () => timer.setPhase(b.dataset.phase)));
 
+/* ---------- double-click (or double-tap) the timer to type a new length; Enter starts it ---------- */
+const LENGTH_KEY = { focus: 'focusMin', short: 'shortMin', long: 'longMin', countdown: 'countdownMin' };
+// "25" → 25 min, "12:30" → 12 min 30 s, "1:30:00", "1h 30m", "90s"
+function parseLength(text) {
+  const t = text.trim().toLowerCase().replace(',', '.');
+  if (!t) return 0;
+  const units = t.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?)?\s*(?:(\d+(?:\.\d+)?)\s*m(?:in(?:utes?|s)?)?)?\s*(?:(\d+)\s*s(?:ec(?:onds?|s)?)?)?$/);
+  if (units && (units[1] || units[2] || units[3])) return ((+units[1] || 0) * 3600 + (+units[2] || 0) * 60 + (+units[3] || 0)) * 1000;
+  if (/^\d+(\.\d+)?$/.test(t)) return Number(t) * 60000;
+  const parts = t.split(':');
+  if (parts.length > 3 || !parts.every((p) => /^\d+$/.test(p))) return NaN;
+  const [s = 0, m = 0, hh = 0] = parts.map(Number).reverse();
+  if (parts.length > 1 && s > 59) return NaN;
+  return (hh * 3600 + m * 60 + s) * 1000;
+}
+let lengthEdit = null;
+function editTimerLength() {
+  const st = timer.state;
+  if (lengthEdit || st.type === 'stopwatch' || S.mode !== 'focus') return;
+  const input = h('input', { class: 'timer timer-input', id: 'timer-input', inputmode: 'numeric', autocomplete: 'off', spellcheck: 'false', maxlength: 12,
+    'aria-label': `New ${PHASE_NAMES[st.phase].toLowerCase()} length, in minutes or mm:ss. Enter to start, Esc to cancel` });
+  input.value = fmtTimer(st.totalMs);
+  const hint = h('div', { class: 'timer-hint', text: `${PHASE_NAMES[st.phase]}: type minutes (25) or mm:ss · Enter starts · Esc cancels` });
+  timerEl.hidden = true;
+  timerEl.after(input, hint);
+  lengthEdit = { input, hint, phase: st.phase, type: st.type };
+  // grow with what's typed (field-sizing where supported; otherwise a rough width, as the digits are narrower than 1ch)
+  const fit = () => { if (!CSS.supports?.('field-sizing', 'content')) input.style.width = `${Math.max(3, input.value.length) * 0.66 + 0.3}ch`; };
+  input.addEventListener('input', () => { input.classList.remove('bad'); fit(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitTimerLength(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTimerEdit(); }
+  });
+  input.addEventListener('blur', () => { if (lengthEdit?.input === input) commitTimerLength(false); });
+  fit();
+  input.focus();
+  input.select();
+}
+function closeTimerEdit() {
+  if (!lengthEdit) return;
+  const { input, hint } = lengthEdit;
+  lengthEdit = null;
+  input.remove(); hint.remove();
+  timerEl.hidden = false;
+}
+/** Enter: save the length for this kind of session and start it. Clicking away: keep the old one unless it was changed. */
+function commitTimerLength(start) {
+  const ed = lengthEdit;
+  if (!ed) return;
+  const st = timer.state;
+  const raw = ed.input.value;
+  const ms = parseLength(raw);
+  const changed = raw.trim() !== fmtTimer(st.totalMs);
+  if (!(ms >= 1000) || ms > 600 * 60000) {
+    if (!start && !changed) return closeTimerEdit();
+    ed.input.classList.add('bad');
+    toast(ms > 600 * 60000 ? 'That’s longer than 10 hours — try a shorter session' : 'Type minutes like 25, or a time like 12:30');
+    if (!start) closeTimerEdit(); else ed.input.select();
+    return;
+  }
+  closeTimerEdit();
+  if (st.phase !== ed.phase || st.type !== ed.type) return; // a friend moved the timer on while you were typing
+  if (!start && !changed) return;
+  // remembered (in whole minutes) for the next session of this kind; this one runs to the second
+  const key = LENGTH_KEY[st.phase];
+  const max = key === 'countdownMin' ? 600 : 180;
+  if (key) {
+    S[key] = Math.min(max, Math.max(1, Math.round(ms / 60000)));
+    if (key !== 'countdownMin') S.preset = 'custom';
+    persist();
+    refreshDurationFields();
+  }
+  if (start) sound.ensure();
+  timer.setLength(Math.min(ms, max * 60000), { start });
+  if (start) pinIfStarted();
+}
+timerEl.addEventListener('dblclick', (e) => { e.preventDefault(); editTimerLength(); });
+// phones don't reliably send dblclick, so spot the second tap ourselves
+let lastTimerTap = 0;
+timerEl.addEventListener('pointerup', (e) => {
+  if (e.pointerType === 'mouse') return;
+  const now = e.timeStamp;
+  if (now - lastTimerTap < 350) { lastTimerTap = 0; e.preventDefault(); editTimerLength(); } else lastTimerTap = now;
+});
+timerEl.title = 'Double-click to change the length';
+
 timer.on('complete', ({ phase, minutes, type }) => {
   sound.alert(S.alert, S.alertVolume);
-  const cur = currentTask();
+  accrue();
+  const cur = sessionTask();
   if (phase === 'focus' || type === 'countdown') {
     addSession(minutes, cur?.text);
-    if (cur && type === 'pomodoro') { cur.spent += 1; saveTasks(); renderTasks(); }
+    if (cur && type === 'pomodoro') cur.spent += 1;
+    flushTaskTime(); saveTasks(); renderTasks();
     toast(`Focus session complete — ${fmtDuration(minutes)} logged. Take a breather ☕`, { timeout: 6000 });
     notify('Focus session complete', 'Time for a break.');
     floatEmoji('🎉', 5);
@@ -449,11 +636,20 @@ timer.on('complete', ({ phase, minutes, type }) => {
   renderStats();
 });
 timer.on('partial', ({ minutes }) => {
-  addSession(minutes, currentTask()?.text);
+  accrue();
+  addSession(minutes, sessionTask()?.text);
   toast(`Logged ${fmtDuration(minutes)} of focus`);
   renderStats();
 });
+let sessionKey = '';
 timer.on('change', ({ source, action }) => {
+  accrue();
+  // a new session (or a restarted one) starts a fresh tally of which task it went to
+  const st = timer.state, key = `${st.type}/${st.phase}/${st.cycle}`;
+  if (key !== sessionKey || ['reset', 'phase', 'type', 'length'].includes(action)) sessionMs = {};
+  sessionKey = key;
+  if (tasksDirty) { tasksDirty = false; saveTasks(); }
+  renderTaskTimes();
   renderTimer(); updateMini();
   if (source === 'local' && syncOn && room.connected) {
     // after a natural finish, the room host is the source of truth for what comes next
@@ -674,7 +870,7 @@ function playMusic(m, autoplay = true) {
   player.innerHTML = '';
   clearInterval(mc.poll);
   const frame = h('iframe', {
-    src: musicSrc(m, autoplay), height: m.kind === 'spotify' ? 152 : 210, title: m.title || 'Music player',
+    src: musicSrc(m, autoplay), height: m.kind === 'spotify' ? 400 : 210, title: m.title || 'Music player',
     allow: 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture', referrerpolicy: 'strict-origin-when-cross-origin',
   });
   // Spotify's embed never autoplays by itself, so we ask it to once it says it's ready
@@ -723,10 +919,10 @@ function buildMusicPanel() {
         h('button', { class: 'x', id: 'music-side-btn', html: icon('panel-right'), onclick: () => setMusicSide(!S.musicSide) }),
         h('button', { class: 'x', title: 'Close (Esc)', html: icon('x'), onclick: () => (musicSideShown ? showMusicSide(false) : openPanel(null)) }))),
     musicControls(),
+    h('div', { class: 'player', id: 'player', hidden: true }), // on top, so Spotify's track list is in view
     h('div', { class: 'music-list mx', id: 'music-list' }),
     h('h3', { class: 'mx', text: 'Your own playlist' }),
     h('div', { class: 'row mx' }, url, h('button', { class: 'btn solid', text: 'Play', onclick: go })),
-    h('div', { class: 'player', id: 'player', hidden: true }),
     h('div', { class: 'row between music-foot', style: { marginTop: '10px' } },
       h('p', { class: 'note mx', text: 'Music keeps playing when you close this panel. Spotify plays full tracks when you’re signed in to Spotify in this browser.' }),
       h('button', { class: 'btn small', id: 'music-stop', hidden: true, text: 'Stop', onclick: stopMusic })),
@@ -827,7 +1023,7 @@ function buildThemesPanel() {
   p.append(
     panelHead('Themes'),
     h('h3', { text: 'Animated scenes' }), h('div', { class: 'theme-grid', id: 'grid-canvas' }),
-    h('h3', { text: 'Live nature' }), h('div', { class: 'theme-grid', id: 'grid-photo' }),
+    h('div', { class: 'theme-groups', id: 'grid-photo' }),
     h('h3', { text: 'Your own' }), h('div', { class: 'theme-grid', id: 'grid-custom' }),
     h('div', { class: 'row', style: { marginTop: '10px' } },
       h('button', { class: 'btn', html: `${icon('upload')}Upload`, onclick: () => file.click() }), url,
@@ -858,7 +1054,11 @@ function renderThemeGrids() {
   if (!gc) return;
   gc.innerHTML = ''; gp.innerHTML = ''; gu.innerHTML = '';
   for (const s of CANVAS_SCENES) gc.append(themeTile(s, thumbCache[s.id] ||= SceneRenderer.thumbnail(s)));
-  for (const s of VIDEO_SCENES) gp.append(themeTile(s, s.thumb));
+  for (const g of VIDEO_GROUPS) {
+    const grid = h('div', { class: 'theme-grid' });
+    for (const s of VIDEO_SCENES) if (s.group === g) grid.append(themeTile(s, s.thumb));
+    gp.append(h('h3', { text: g }), grid);
+  }
   for (const c of customScenes) gu.append(themeTile({ ...c, custom: true }, c.url));
   if (!customScenes.length) gu.append(h('p', { class: 'note', style: { gridColumn: '1 / -1' }, text: 'Upload a photo or paste an image link to make it your background.' }));
 }
@@ -964,6 +1164,10 @@ function renderStats() {
       h('i', { style: { height: `${Math.max(2, (d.min / max) * 100)}%` }, 'data-v': d.min ? fmtDuration(d.min) : null }), h('span', { text: d.label })))),
     h('div', { class: 'row between', style: { marginTop: '16px', fontSize: '13.5px', color: 'var(--muted)' } },
       h('span', { text: `This month: ${fmtDuration(s.monthMin)}` }), h('span', { text: `All time: ${fmtDuration(s.totalMin)}` })),
+    s.byTask.length ? h('h3', { text: 'By task · last 7 days' }) : null,
+    s.byTask.length ? h('ul', { class: 'task-bars' }, ...s.byTask.map((r) => h('li', { title: `${r.task}: ${fmtDuration(r.min)} over ${r.n} ${r.n === 1 ? 'session' : 'sessions'}` },
+      h('span', { class: 'tb-name', text: r.task }), h('b', { text: fmtDuration(r.min) }),
+      h('i', { style: { width: `${Math.max(2, (r.min / s.byTask[0].min) * 100)}%` } })))) : null,
     h('h3', { text: 'Recent sessions' }),
     s.recent.length
       ? h('ul', { class: 'log-list' }, ...s.recent.map((r) => h('li', {},
@@ -984,14 +1188,14 @@ function buildSettingsPanel() {
   const p = $('#panel-settings');
   const row = (label, control, sub) => h('div', { class: 'set-row' }, h('label', {}, label, sub ? h('span', { class: 'sub', text: sub }) : null), control);
   const sel = (key, opts, after) => {
-    const s = h('select', { class: 'field' }, ...opts.map(([v, t]) => h('option', { value: v, text: t })));
+    const s = h('select', { class: 'field', 'data-key': key }, ...opts.map(([v, t]) => h('option', { value: v, text: t })));
     s.value = S[key];
     s.addEventListener('change', () => { S[key] = s.value; persist(); after?.(s.value); });
     return s;
   };
   const tog = (key, after) => { const t = toggleEl(S[key], (v) => { S[key] = v; persist(); after?.(v); }); t.dataset.key = key; return t; };
   const num = (key, min, max, after) => {
-    const n = h('input', { type: 'number', class: 'field', min, max, value: S[key] });
+    const n = h('input', { type: 'number', class: 'field', min, max, value: S[key], 'data-key': key });
     n.addEventListener('change', () => {
       const v = Math.min(max, Math.max(min, Math.round(Number(n.value) || S[key])));
       n.value = v; S[key] = v; persist(); after?.();
@@ -1529,7 +1733,7 @@ room.on('rejected', (reason) => {
   toast(REJECT_TEXT[reason] || 'Blocked a connection that failed the Google sign-in check');
 });
 
-const TIMER_VERBS = { start: 'started', pause: 'paused', skip: 'skipped to the next session on', reset: 'reset', phase: 'switched', type: 'changed' };
+const TIMER_VERBS = { start: 'started', pause: 'paused', skip: 'skipped to the next session on', reset: 'reset', phase: 'switched', type: 'changed', length: 'set a new length on' };
 room.on('message', (msg, from) => {
   if (!from) return;
   const who = nameOf(from);
@@ -2157,6 +2361,7 @@ function openPanel(id) {
   if (id && openId === id) id = null;
   openId = id;
   if (id) ensurePanel(id);
+  if (id && narrowScreen() && navOpen()) setNav(false, { remember: false }); // the panel takes the screen
   $$('.panel').forEach((p) => p.classList.toggle('open', p.id === `panel-${id}`));
   $$('#dock [data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === id || (b.dataset.panel === 'music' && musicSideShown)));
   if (id === 'stats') {
@@ -2174,7 +2379,7 @@ function openPanel(id) {
 $$('#dock [data-panel]').forEach((b) => b.addEventListener('click', () => openPanel(b.dataset.panel)));
 document.addEventListener('pointerdown', (e) => {
   if (!openId) return;
-  if (e.target.closest('.panel, #dock, #toasts, #ring-card, #friend-chip, #call-bar, #focus-task, .mode-switch')) return;
+  if (e.target.closest('.panel, #side-nav, #toasts, #ring-card, #friend-chip, #call-bar, #focus-task, .mode-switch')) return;
   openPanel(null);
 });
 
@@ -2217,7 +2422,8 @@ addEventListener('keydown', (e) => {
     r: () => $('#t-reset').click(), n: () => timer.state.type === 'pomodoro' && timer.skip(),
     1: () => setMode('ambient'), 2: () => setMode('home'), 3: () => setMode('focus'),
     t: () => openPanel('tasks'), s: () => openPanel('sounds'), m: () => openPanel('music'), b: () => openPanel('themes'), g: () => openPanel('room'),
-    f: toggleFullscreen, p: () => popoutSupported() && openPopout(), escape: () => openPanel(null),
+    f: toggleFullscreen, p: () => popoutSupported() && openPopout(), '\\': () => setNav(!navOpen()),
+    escape: () => { if (narrowScreen() && navOpen() && !openId) setNav(false, { remember: false }); else openPanel(null); },
     q: () => S.showQuote && setBigQuote(!S.bigQuote),
     ...(voice.inCall ? { v: () => voice.toggleMute(), d: () => voice.toggleDeaf() } : {}),
   };
@@ -2234,6 +2440,8 @@ function loop() {
   const sec = Math.floor(Date.now() / 1000);
   if (sec !== lastSec) {
     lastSec = sec;
+    accrue(); renderTaskTimes();
+    if (sec % 15 === 0 && tasksDirty) { tasksDirty = false; saveTasks(); }
     renderClock();
     if (room.state !== 'idle') { updateChip(); updateFriendCard(); updateRoomHint(); }
   }

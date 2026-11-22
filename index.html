@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="fonts/fonts.css">
-  <link rel="stylesheet" href="css/style.css?v=20261117d">
+  <link rel="stylesheet" href="css/style.css?v=20261121b">
 </head>
 <body class="mode-home">
   <div id="bg" aria-hidden="true">
@@ -50,6 +50,11 @@
         <div id="mf-current" class="mf-current" hidden>
           <button id="mf-check" class="check-btn" title="Mark done"></button>
           <span id="mf-text"></span>
+          <span id="mf-time" class="mf-time" title="Time focused on this task"></span>
+        </div>
+        <div id="mf-next" class="mf-next" hidden>
+          <input id="mf-more" autocomplete="off" maxlength="140" placeholder="+ Add another task" aria-label="Add another task">
+          <button id="mf-all" class="mf-all" title="See all your tasks">+1 more</button>
         </div>
       </div>
     </section>
@@ -70,13 +75,14 @@
         <button id="t-skip" class="round glass" title="Skip to next (N)"></button>
       </div>
       <button id="focus-task" class="focus-task glass" title="Open tasks">
-        <span class="ft-dot"></span><span id="focus-task-text">Pick a task to focus on</span>
+        <span class="ft-dot"></span><span id="focus-task-text">Pick a task to focus on</span><span id="focus-task-time" class="ft-time"></span>
       </button>
       <div id="sync-badge" class="sync-badge" hidden></div>
     </section>
   </main>
 
-  <footer id="bottom">
+  <aside id="side-nav" class="side-nav">
+    <button id="menu-btn" class="menu-btn glass" data-icon="menu" aria-controls="dock" aria-expanded="true" title="Hide menu (\)"></button>
     <nav id="dock" class="dock glass" aria-label="Tools">
       <button data-panel="sounds" data-label="Sounds" data-icon="audio-waveform" title="Ambient sounds (S)"></button>
       <button data-panel="music" data-label="Music" data-icon="music" title="Music (M)"></button>
@@ -89,6 +95,9 @@
       <button id="popout-btn" data-label="Pop out" data-icon="picture-in-picture-2" title="Pop out timer (P)"></button>
       <button id="fullscreen-btn" data-label="Full screen" data-icon="maximize" title="Full screen (F)"></button>
     </nav>
+  </aside>
+
+  <footer id="bottom">
     <div id="mode-switch" class="mode-switch glass" role="tablist" aria-label="Mode">
       <button data-mode="ambient" data-icon="flower-2" title="Ambient (1)"><span>Ambient</span></button>
       <button data-mode="home" data-icon="house" title="Home (2)"><span>Home</span></button>
@@ -109,6 +118,6 @@
   <div id="toasts" aria-live="polite"></div>
 
   <script src="vendor/peerjs.min.js" defer></script>
-  <script type="module" src="js/app.js?v=20261117d"></script>
+  <script type="module" src="js/app.js?v=20261121b"></script>
 </body>
 </html>
