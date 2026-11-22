@@ -7,8 +7,8 @@
  * She shows on the page, where you can drag her anywhere, and in the pop-out timer when it's open
  * (so you still see her while the pop-out sits on top of your other apps).
  */
-import { h, pick, rand, clamp } from './util.js?v=20261121c';
-import { WATER_GOAL_ML, BOTTLE_ML, waterToday, setWaterMl, countSip, fmtLitres } from './store.js?v=20261121c';
+import { h, pick, rand, clamp } from './util.js?v=20261121d';
+import { WATER_GOAL_ML, BOTTLE_ML, waterToday, setWaterMl, countSip, fmtLitres } from './store.js?v=20261121d';
 
 const MIN = 60000;
 const SNOOZE_MIN = 5;

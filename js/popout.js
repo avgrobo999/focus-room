@@ -4,10 +4,17 @@
  *
  * It opens from a click, or by itself when you switch to another tab, if Chrome allows it:
  * during a voice call, or when "Automatic picture-in-picture" is allowed in the site settings.
+ *
+ * Browsers without that (Opera GX, for one) get the timer drawn into a video instead, shown in
+ * ordinary video picture-in-picture: still always on top, with play/pause standing in for
+ * start/pause and next-track for skip.
  */
-import { icon } from './icons.js?v=20261121c';
+import { icon } from './icons.js?v=20261121d';
 
-export const popoutSupported = () => 'documentPictureInPicture' in window && window.isSecureContext;
+const docPip = () => 'documentPictureInPicture' in window && window.isSecureContext;
+const videoPip = () => !!document.pictureInPictureEnabled && typeof HTMLCanvasElement.prototype.captureStream === 'function'
+  && typeof HTMLVideoElement.prototype.requestPictureInPicture === 'function';
+export const popoutSupported = () => docPip() || videoPip();
 
 const CSS = `
 *{box-sizing:border-box;margin:0}
@@ -43,15 +50,19 @@ export class Popout {
     this.opening = null;
   }
 
-  get open() { return !!this.win && !this.win.closed; }
-  get doc() { return this.open && this.els ? this.win.document : null; }
+  get open() {
+    if (this.video) return document.pictureInPictureElement === this.video;
+    return !!this.win && !this.win.closed;
+  }
+  get doc() { return !this.video && this.open && this.els ? this.win.document : null; }
 
   async show() {
-    if (this.open) { this.win.focus?.(); return true; }
+    if (this.open) { this.win?.focus?.(); return true; }
     if (!popoutSupported()) return false;
     if (this.opening) return this.opening;
     this.opening = (async () => {
       try {
+        if (!docPip()) return await this._showVideo();
         const win = await documentPictureInPicture.requestWindow({ width: 300, height: 220 });
         this._build(win);
         return true;
@@ -63,7 +74,72 @@ export class Popout {
     return this.opening;
   }
 
-  close() { if (this.open) this.win.close(); }
+  close() {
+    if (!this.open) return;
+    if (this.video) document.exitPictureInPicture().catch(() => {});
+    else this.win.close();
+  }
+
+  /* ---------- the fallback: the timer drawn into a video in picture-in-picture ---------- */
+  async _showVideo() {
+    if (!this.video) {
+      const c = document.createElement('canvas');
+      c.width = 480; c.height = 270;
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.autoplay = true;
+      v.setAttribute('aria-hidden', 'true');
+      // in the page (some browsers won't play a detached video) but out of sight
+      v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;z-index:-1';
+      document.body.append(v);
+      this.canvas = c;
+      this.ctx = c.getContext('2d');
+      this.stream = c.captureStream(0);
+      this.track = this.stream.getVideoTracks()[0];
+      v.srcObject = this.stream;
+      // its play/pause button starts and pauses the timer; the video itself keeps playing
+      v.addEventListener('pause', () => { if (this.open) v.play().catch(() => {}); });
+      v.addEventListener('enterpictureinpicture', () => this._mediaKeys(true));
+      v.addEventListener('leavepictureinpicture', () => { this._mediaKeys(false); this.onClose?.(); });
+      this.video = v;
+    }
+    this._draw(this.state || { phase: '', time: '' });
+    await this.video.play().catch(() => {});
+    await this.video.requestPictureInPicture();
+    return true;
+  }
+
+  _mediaKeys(on) {
+    const ms = navigator.mediaSession;
+    if (!ms) return;
+    const set = (a, fn) => { try { ms.setActionHandler(a, on ? fn : null); } catch { /* not in this browser */ } };
+    set('play', () => this.actions.toggle());
+    set('pause', () => this.actions.toggle());
+    set('nexttrack', () => this.actions.skip());
+    set('previoustrack', () => this.actions.reset());
+  }
+
+  _draw(s) {
+    const { ctx: g, canvas: c } = this;
+    const W = c.width, H = c.height;
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#3a2660'); bg.addColorStop(1, '#1c1433');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    const font = (w, px) => `${w} ${px}px Outfit, system-ui, sans-serif`;
+    const fit = (text, w, px, max) => { g.font = font(w, px); const m = g.measureText(text).width; if (m > max) g.font = font(w, Math.floor(px * max / m)); };
+    const paused = s.toggleLabel && s.toggleLabel !== 'Pause';
+    g.fillStyle = 'rgba(255,255,255,.82)';
+    g.font = font(500, 26);
+    g.fillText(paused ? `${s.phase} · paused` : s.phase, W / 2, 46);
+    g.fillStyle = paused ? 'rgba(255,255,255,.7)' : '#fff';
+    fit(s.time, 650, 128, W - 40);
+    g.fillText(s.time, W / 2, 140);
+    g.fillStyle = 'rgba(255,255,255,.8)';
+    if (s.eta) { g.font = font(500, 22); g.fillText(s.eta, W / 2, 212); }
+    if (s.task) { fit(s.task, 500, 20, W - 40); g.fillText(s.task, W / 2, s.eta ? 244 : 222); }
+    this.track?.requestFrame?.();
+  }
 
   _build(win) {
     const d = win.document;
@@ -108,6 +184,12 @@ export class Popout {
 
   /** s: {phase, time, eta, toggleLabel, resetTitle, showSkip, task, bg} */
   render(s) {
+    if (this.video) {
+      const key = `${s.phase}|${s.time}|${s.eta}|${s.task}|${s.toggleLabel}`;
+      this.state = s;
+      if (this.open && key !== this.lastKey) { this.lastKey = key; this._draw(s); }
+      return;
+    }
     if (!this.open || !this.els) return;
     const e = this.els;
     const set = (k, v, fn) => { if (this.last[k] !== v) { this.last[k] = v; fn(v); } };

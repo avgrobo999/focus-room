@@ -19,7 +19,7 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 - **Your buddy:** a little girl runs in when a focus session finishes and blows you a flying kiss, gives you a hug or winks, picked at random each time. Every 15–20 minutes she brings you a glass of water: tick *I drank water* and she jumps for joy and showers you with hearts. Snooze (or leave her waiting) and she walks off sad, then comes back in 5 minutes. Drag her anywhere on the screen and she stays there. She also shows up in the pop-out timer. Settings → *Your buddy* turns the cheers and water reminders on or off, keeps her on screen all the time, or calls her over to see her now
 - **Menu on the left:** Sounds, Music, Tasks, Stats, Themes, Friends, Settings, Pop out and Full screen sit in a labelled menu down the left side. The hamburger button (or `\`) opens and collapses it, and it remembers your choice. On a phone it starts closed at the bottom left and opens upwards
 - **Fits any window:** the clock, timer and quote scale with the window's width and height, in the browser, the installed app or the pop-out, down to a phone held sideways
-- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Focus stats and your focus log follows your account to any device. It's kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions instead of overwriting each other ([privacy](privacy.html))
+- **Stats:** today, last 7 days, streak, monthly and all-time focus time, recent sessions. Sign in with Google under Tasks or Focus stats and your tasks and focus log follow your account to any device. They're kept in a hidden app-only folder in your own Google Drive, and devices merge their sessions and tasks instead of overwriting each other ([privacy](privacy.html))
 - **Study room (up to 4 people):**
   - Create a room, sign in with Google, and send the invite link. It's end-to-end encrypted
   - **Voice call:** join or leave voice, mute (`V`), deafen (`D`), see who's talking, and set each person's volume. Audio goes browser to browser and is never recorded
@@ -48,7 +48,7 @@ A calm, aesthetic focus dashboard: a big clock, a Pomodoro timer, tasks, ambient
 
 Create an OAuth **Web application** client in Google Cloud. Its "Authorized JavaScript origin" is `https://avgrobo999.github.io`. Put the client ID (public, not a secret) in `GOOGLE_CLIENT_ID` in `js/auth.js`. Until then, rooms stay disabled and the rest of the app works normally.
 
-For focus-log sync, in the same Google Cloud project: enable the **Google Drive API**, and on the OAuth consent screen add the `.../auth/drive.appdata` scope ("See, create, and delete its own configuration data in your Google Drive"). While the consent screen is in *Testing*, only the test users listed there can sign in, so publish it to let anyone use sync.
+For task and focus-log sync, in the same Google Cloud project: enable the **Google Drive API**, and on the OAuth consent screen add the `.../auth/drive.appdata` scope ("See, create, and delete its own configuration data in your Google Drive"). While the consent screen is in *Testing*, only the test users listed there can sign in, so publish it to let anyone use sync.
 
 ## Run locally
 

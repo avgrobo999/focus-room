@@ -1,18 +1,18 @@
-import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121c';
-import { icon } from './icons.js?v=20261121c';
-import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount, WATER_GOAL_ML, BOTTLE_ML, waterEvents, waterToday, setWaterMl, fmtLitres } from './store.js?v=20261121c';
-import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121c';
-import { quoteOfTheDay } from './quotes.js?v=20261121c';
-import { Timer } from './timer.js?v=20261121c';
-import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121c';
-import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121c';
-import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121c';
-import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121c';
-import { Ringtone } from './ring.js?v=20261121c';
-import { Popout, popoutSupported } from './popout.js?v=20261121c';
-import { Buddy } from './buddy.js?v=20261121c';
-import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121c';
-import { sha256b64u } from './crypto.js?v=20261121c';
+import { $, $$, h, fmtTimer, fmtDuration, debounce, uid, netLog, netLogText } from './util.js?v=20261121d';
+import { icon } from './icons.js?v=20261121d';
+import { load, save, loadSettings, PRESETS, DEFAULT_SETTINGS, addSession, statsSummary, getLog, setLog, mergeLogs, logAccount, WATER_GOAL_ML, BOTTLE_ML, waterEvents, waterToday, setWaterMl, fmtLitres, loadTasks, saveTasks as storeTasks, taskEvents } from './store.js?v=20261121d';
+import { syncNow, signInSync, signOutSync, syncEvents, syncStatus, lastSyncAt, hasUnsynced, syncAvailable } from './sync.js?v=20261121d';
+import { quoteOfTheDay } from './quotes.js?v=20261121d';
+import { Timer } from './timer.js?v=20261121d';
+import { sound, SOUND_LIST, SOUND_PRESETS, ALERTS } from './sounds.js?v=20261121d';
+import { SceneRenderer, CANVAS_SCENES, VIDEO_SCENES, VIDEO_GROUPS, LEGACY_SCENES } from './scenes.js?v=20261121d';
+import { Room, newRoom, parseInvite, roomSupported, MAX_PEOPLE } from './room.js?v=20261121d';
+import { Voice, voiceSupported, outputSupported } from './voice.js?v=20261121d';
+import { Ringtone } from './ring.js?v=20261121d';
+import { Popout, popoutSupported } from './popout.js?v=20261121d';
+import { Buddy } from './buddy.js?v=20261121d';
+import { authConfigured, verifyIdToken, renderSignIn, promptSignIn, signOut, decodeJwt, tokenTtl, profileFromToken, roomNonceInput } from './auth.js?v=20261121d';
+import { sha256b64u } from './crypto.js?v=20261121d';
 
 // Refuse to run inside someone else's frame (clickjacking)
 if (window.top !== window.self) {
@@ -27,8 +27,9 @@ if (window.top !== window.self) {
 /* ================= state ================= */
 const S = loadSettings();
 const persist = debounce(() => save('settings', S), 250);
-let tasks = load('tasks', []);
-const saveTasks = () => save('tasks', tasks);
+let tasks = loadTasks(); // signed in to sync, they're the Google account's tasks
+let tasksOwner = logAccount()?.email || '';
+const saveTasks = () => storeTasks(tasks);
 let customScenes = load('customScenes', []);
 
 const timer = new Timer(() => S);
@@ -273,11 +274,29 @@ function toggleTask(id) {
   saveTasks(); renderTasks();
 }
 
+// the list changed under us: synced from another device, or a different Google account
+let tasksStale = false;
+taskEvents.addEventListener('reload', () => {
+  const owner = logAccount()?.email || '';
+  // focus time counted here but not saved yet is kept (time on a task never goes down)
+  const mine = owner === tasksOwner ? new Map(tasks.map((t) => [t.id, t.ms || 0])) : new Map();
+  if (owner !== tasksOwner) sessionMs = {};
+  tasksOwner = owner;
+  tasks = loadTasks();
+  let more = false;
+  for (const t of tasks) { const ms = mine.get(t.id); if (ms > t.ms) { t.ms = ms; more = true; } }
+  if (more) saveTasks();
+  renderTasks();
+});
+
 let dragId = null;
 function renderTasks() {
   renderMainFocus();
   const list = $('#task-list');
   if (!list) return;
+  // don't pull the list out from under someone typing or dragging; catch up when they're done
+  tasksStale = !!dragId || !!list.querySelector('[contenteditable="true"], [contenteditable="plaintext-only"]');
+  if (tasksStale) return;
   list.innerHTML = '';
   const cur = currentTask();
   if (!tasks.length) list.append(h('li', { class: 'empty', text: 'No tasks yet. Add one above — the top task becomes your focus.' }));
@@ -290,8 +309,10 @@ function renderTasks() {
     });
     const commit = () => {
       textEl.contentEditable = 'false';
-      const v = textEl.textContent.trim();
-      if (v && v !== t.text) { t.text = v; saveTasks(); renderMainFocus(); sendStatusSoon(); } else textEl.textContent = t.text;
+      const v = textEl.textContent.trim().slice(0, 200);
+      const now = tasks.find((x) => x.id === t.id); // the list may have been synced meanwhile
+      if (now && v && v !== now.text) { now.text = v; saveTasks(); renderMainFocus(); sendStatusSoon(); } else textEl.textContent = now?.text ?? t.text;
+      if (tasksStale) renderTasks();
     };
     textEl.addEventListener('blur', commit);
     textEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); textEl.blur(); } });
@@ -315,6 +336,7 @@ function renderTasks() {
       if (!dragId || dragId === t.id) return;
       accrue();
       const moving = tasks.find((x) => x.id === dragId);
+      if (!moving || !tasks.some((x) => x.id === t.id)) return;
       tasks = tasks.filter((x) => x.id !== dragId);
       tasks.splice(tasks.findIndex((x) => x.id === t.id), 0, moving);
       saveTasks(); sendStatusSoon();
@@ -343,7 +365,9 @@ function buildTasksPanel() {
       h('span', { id: 'task-count' }),
       h('button', { class: 'btn small', id: 'task-clear', text: 'Clear completed', onclick: () => { tasks = tasks.filter((t) => !t.done); saveTasks(); renderTasks(); } })),
     h('p', { class: 'note', text: 'Add as many as you like. Your top unfinished task is your current focus: drag to reorder, or press the target to focus on a task now. Focus time counts towards whichever task is current while the timer runs.' }),
+    h('div', { id: 'task-sync', class: 'stats-sync', style: { margin: '12px 0 0' } }),
   );
+  renderSyncRow();
 }
 
 /** put a task on top so it becomes the current focus */
@@ -1155,10 +1179,12 @@ const ago = (t) => {
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 };
 
-// who the focus log belongs to, and whether it's reached their Google account yet
+// whose tasks and focus log these are, and whether they've reached their Google account yet
+// (the same row sits in Focus stats and in Tasks)
 function renderSyncRow() {
-  const box = $('#stats-sync');
-  if (!box) return;
+  for (const box of [$('#stats-sync'), $('#task-sync')]) if (box) syncRow(box);
+}
+function syncRow(box) {
   box.innerHTML = '';
   if (!syncAvailable()) return;
   const acct = logAccount();
@@ -1169,29 +1195,29 @@ function renderSyncRow() {
         h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' }),
         syncStatus.state === 'error' ? h('span', { class: 'sub', text: syncStatus.error }) : null),
       h('button', {
-        class: 'btn small', disabled: busy, title: 'Keep your focus log in your Google account so it follows you to any device',
+        class: 'btn small', disabled: busy, title: 'Keep your tasks and focus log in your Google account so they follow you to any device',
         html: `${icon('cloud')}<span>${busy ? 'Connecting…' : 'Sync with Google'}</span>`,
-        onclick: async () => { if (await signInSync()) toast(`Your focus log now follows ${logAccount()?.email || 'your account'}`); },
+        onclick: async () => { if (await signInSync()) toast(`Your tasks and focus log now follow ${logAccount()?.email || 'your account'}`); },
       }),
     );
   } else {
     const at = lastSyncAt();
     const state = busy ? 'Syncing…'
       : syncStatus.state === 'error' ? syncStatus.error
-        : hasUnsynced() ? (at ? `Synced ${ago(at)} · new sessions not uploaded yet` : 'Not synced yet')
+        : hasUnsynced() ? (at ? `Synced ${ago(at)} · latest changes not uploaded yet` : 'Not synced yet')
           : `Synced ${ago(at)}`;
     box.append(
-      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}`, title: `Your focus log is kept in ${acct.email}’s Google Drive` },
+      h('p', { class: `sync-line${syncStatus.state === 'error' ? ' err' : ''}`, title: `Your tasks and focus log are kept in ${acct.email}’s Google Drive` },
         h('span', { html: icon(hasUnsynced() || syncStatus.state === 'error' ? 'cloud' : 'cloud-check') }),
         h('span', { class: 'who', text: acct.email }), h('span', { class: 'sub', text: state })),
       h('div', { class: 'row' },
         h('button', { class: 'btn small', disabled: busy, html: `${icon('refresh-cw')}<span>Sync now</span>`, onclick: () => syncNow({ interactive: true }) }),
         h('button', {
-          class: 'btn small', disabled: busy, html: `${icon('log-out')}<span>Sign out</span>`, title: 'Stop syncing on this device. Your log stays in your Google account',
+          class: 'btn small', disabled: busy, html: `${icon('log-out')}<span>Sign out</span>`, title: 'Stop syncing on this device. Your tasks and log stay in your Google account',
           onclick: async () => {
             const { kept } = await signOutSync();
-            toast(kept ? 'Signed out. Some sessions hadn’t uploaded yet, so they’re kept here and will sync next time you sign in'
-              : 'Signed out. Your focus log is safe in your Google account');
+            toast(kept ? 'Signed out. Some changes hadn’t uploaded yet, so they’re kept here and will sync next time you sign in'
+              : 'Signed out. Your tasks and focus log are safe in your Google account');
           },
         })),
     );
@@ -1277,7 +1303,7 @@ function buildSettingsPanel() {
     try {
       const data = JSON.parse(await fileIn.files[0].text());
       if (data.settings) save('settings', data.settings);
-      if (data.tasks) save('tasks', data.tasks);
+      if (Array.isArray(data.tasks)) storeTasks(data.tasks); // into the signed-in account's list, if any
       if (Array.isArray(data.log)) setLog(mergeLogs(getLog(), data.log));
       if (data.customScenes) save('customScenes', data.customScenes);
       location.reload();
@@ -1328,7 +1354,7 @@ function buildSettingsPanel() {
     row('Sync timers', tog('roomSyncDefault', () => renderRoom()), 'Start, pause and skip together when friends join your room'),
     row('Sync themes', tog('roomThemeSync', () => renderRoom()), 'Your theme changes go to the room, and friends’ come to you'),
     h('h3', { text: 'Your data' }),
-    h('p', { class: 'note', text: 'Settings, tasks and themes are saved in this browser only. Back them up to move them to another device. Your focus log can follow your Google account: turn on Sync in Focus stats.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
+    h('p', { class: 'note', text: 'Settings and themes are saved in this browser only. Back them up to move them to another device. Your tasks and focus log can follow your Google account: press Sync with Google in Tasks or Focus stats.' }, ' ', h('a', { href: 'privacy.html', target: '_blank', rel: 'noopener', text: 'Privacy' })),
     h('div', { class: 'row', style: { flexWrap: 'wrap' } },
       h('button', {
         class: 'btn small', text: 'Export backup', onclick: () => {
@@ -2427,7 +2453,11 @@ function openPanel(id) {
   if (id === 'themes' && !thumbsMade) { thumbsMade = true; renderThemeGrids(); }
   if (id === 'music') ensureMusicPlayer();
   if (id === 'room') { unread = 0; updateRoomDot(); renderChat(); setTimeout(() => (room.connected ? $('#chat-in') : null)?.focus({ preventScroll: true }), 50); }
-  if (id === 'tasks') setTimeout(() => $('#task-input')?.focus({ preventScroll: true }), 50);
+  if (id === 'tasks') {
+    setTimeout(() => $('#task-input')?.focus({ preventScroll: true }), 50);
+    // fetch tasks added on other devices (a click, so Google's pop-up may open, as for stats)
+    if (logAccount()) syncNow({ interactive: hasUnsynced() || Date.now() - lastSyncAt() > 15 * 60e3 });
+  }
   poke();
 }
 $$('#dock [data-panel]').forEach((b) => b.addEventListener('click', () => openPanel(b.dataset.panel)));

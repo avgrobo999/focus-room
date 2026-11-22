@@ -1,4 +1,4 @@
-import { dayKey, uid } from './util.js?v=20261121c';
+import { dayKey, uid } from './util.js?v=20261121d';
 
 const PREFIX = 'focusroom:v1:';
 
@@ -96,6 +96,119 @@ export function setWaterMl(ml) { return setWater({ ml: Math.max(0, Math.min(2000
 export function countSip() { return setWater({ n: waterToday().n + 1 }).n; }
 export const fmtLitres = (ml) => String(+(ml / 1000).toFixed(2));
 
+/* ---------- tasks ---------- */
+// Like the focus log, signed in to sync the list belongs to that Google account ('tasks:<email>',
+// a local copy of what's in its Drive); signed out it's this browser's own list ('tasks').
+// Each task carries u (when its text, done or estimate last changed); 'taskMeta' keeps
+// {deleted: {id: when}, orderAt: when the order last changed}, so devices can merge their lists.
+export const taskEvents = new EventTarget(); // 'saved' ({detail: {edit}}) when this device changes them; 'reload' when they change under the app
+const taskKey = (acct = logAccount()) => (acct?.email ? `tasks:${acct.email}` : 'tasks');
+const taskMetaKey = (acct = logAccount()) => (acct?.email ? `taskMeta:${acct.email}` : 'taskMeta');
+const TOMBSTONE_MS = 90 * 864e5;
+
+const int = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
+// a clean copy of one task, or null if it isn't one (data from Drive or a backup file is untrusted)
+export function cleanTask(t) {
+  if (!t || typeof t !== 'object') return null;
+  if (typeof t.id !== 'string' || !/^[\w-]{1,24}$/.test(t.id)) return null;
+  const text = typeof t.text === 'string' ? t.text.trim().slice(0, 200) : '';
+  if (!text) return null;
+  return {
+    id: t.id, text, done: t.done === true,
+    est: int(t.est, 1, 99, 1), spent: int(t.spent, 0, 9999, 0), ms: int(t.ms, 0, 1e11, 0),
+    u: int(t.u, 0, Date.now() + 864e5, 0),
+  };
+}
+const cleanTasks = (list) => {
+  const seen = new Set();
+  return (Array.isArray(list) ? list : []).map(cleanTask).filter((t) => t && !seen.has(t.id) && seen.add(t.id));
+};
+function cleanMeta(m) {
+  const cutoff = Date.now() - TOMBSTONE_MS;
+  const deleted = {};
+  for (const [id, at] of Object.entries(m?.deleted && typeof m.deleted === 'object' ? m.deleted : {})) {
+    if (/^[\w-]{1,24}$/.test(id) && Number.isFinite(at) && at >= cutoff) deleted[id] = at;
+  }
+  return { deleted, orderAt: int(m?.orderAt, 0, Date.now() + 864e5, 0) };
+}
+
+export function loadTasks() { return cleanTasks(load(taskKey(), [])); }
+
+/** the whole list as it goes to Drive: {tasks, deleted, orderAt} */
+export function getTaskState() { return { tasks: loadTasks(), ...cleanMeta(load(taskMetaKey(), {})) }; }
+
+const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+const shown = (list) => JSON.stringify(list.map(({ u, ...t }) => t));
+
+/** keep a merged list (from sync); tells the app if what it shows has changed */
+export function setTaskState(st) {
+  const before = loadTasks();
+  save(taskKey(), cleanTasks(st.tasks));
+  save(taskMetaKey(), cleanMeta(st));
+  if (shown(before) !== shown(loadTasks())) taskEvents.dispatchEvent(new Event('reload'));
+}
+
+/**
+ * Save the app's list. Works out what changed since the last save, so each edited task is
+ * stamped with the time, deleted ones leave a note behind, and a new order is dated.
+ * Stamps u on the app's own task objects too.
+ */
+export function saveTasks(list) {
+  const now = Date.now();
+  const prev = loadTasks();
+  const meta = cleanMeta(load(taskMetaKey(), {}));
+  const prevById = new Map(prev.map((t) => [t.id, t]));
+  let edit = false;
+  const out = [];
+  for (const t of list) {
+    const c = cleanTask({ ...t, u: 0 });
+    if (!c) continue;
+    const p = prevById.get(c.id);
+    const changed = !p || p.text !== c.text || p.done !== c.done || p.est !== c.est || p.spent !== c.spent;
+    c.u = changed || !p.u ? Math.max(now, (p?.u || 0) + 1) : p.u; // an edit always comes after the version it changed
+    if (changed) edit = true;
+    t.u = c.u;
+    delete meta.deleted[c.id];
+    out.push(c);
+  }
+  const ids = new Set(out.map((t) => t.id));
+  for (const p of prev) if (!ids.has(p.id)) { meta.deleted[p.id] = now; edit = true; }
+  // same order as before, apart from new tasks? (adding at the bottom isn't a reorder; at the top it is)
+  const expected = [...prev.filter((p) => ids.has(p.id)).map((p) => p.id), ...out.filter((t) => !prevById.has(t.id)).map((t) => t.id)];
+  if (!sameIds(out.map((t) => t.id), expected)) { meta.orderAt = Math.max(now, meta.orderAt + 1); edit = true; }
+  const timeOnly = !edit && JSON.stringify(out) !== JSON.stringify(prev);
+  save(taskKey(), out);
+  save(taskMetaKey(), meta);
+  if (edit || timeOnly) taskEvents.dispatchEvent(new CustomEvent('saved', { detail: { edit } }));
+}
+
+/**
+ * Merge two task lists (each {tasks, deleted, orderAt}). Per task the latest edit wins and the
+ * focus time and sessions done never go down; a task deleted after its last edit stays deleted;
+ * the order comes from whichever list was reordered last, with the other's new tasks after.
+ */
+export function mergeTasks(a, b) {
+  const A = { tasks: cleanTasks(a?.tasks), ...cleanMeta(a) };
+  const B = { tasks: cleanTasks(b?.tasks), ...cleanMeta(b) };
+  const deleted = { ...A.deleted };
+  for (const [id, at] of Object.entries(B.deleted)) deleted[id] = Math.max(deleted[id] || 0, at);
+  const byId = new Map();
+  for (const t of [...A.tasks, ...B.tasks]) {
+    const o = byId.get(t.id);
+    if (!o) { byId.set(t.id, t); continue; }
+    const w = t.u >= o.u ? t : o; // a tie goes to b (this device, when syncing)
+    byId.set(t.id, { ...w, ms: Math.max(t.ms, o.ms), spent: Math.max(t.spent, o.spent) });
+  }
+  const [first, second] = B.orderAt > A.orderAt ? [B, A] : [A, B]; // never reordered: a's order, b's new tasks after
+  const order = [...new Set([...first.tasks, ...second.tasks].map((t) => t.id))];
+  const tasks = order.map((id) => byId.get(id)).filter((t) => !(deleted[t.id] >= t.u));
+  for (const t of tasks) delete deleted[t.id];
+  return {
+    tasks: [...tasks.filter((t) => !t.done), ...tasks.filter((t) => t.done)],
+    deleted, orderAt: Math.max(A.orderAt, B.orderAt),
+  };
+}
+
 /* ---------- focus stats ---------- */
 // log: [{ts, day, min, task}]
 // Signed in to sync, the log belongs to that Google account ('log:<email>', a local copy of
@@ -134,18 +247,28 @@ export function mergeLogs(...logs) {
 
 /** Switch whose log is shown. Signing in for the first time brings this browser's own log along. */
 export function useAccount(acct) {
-  if (!acct) { save('account', null); return; }
   const prev = logAccount();
-  save('account', { email: acct.email, name: acct.name || acct.email, picture: acct.picture || '' });
-  if (!prev?.email) {
-    const guest = load('log', []);
-    if (guest.length) { save(logKey(acct), mergeLogs(load(logKey(acct), []), guest)); save('log', []); }
+  if (!acct) save('account', null);
+  else {
+    save('account', { email: acct.email, name: acct.name || acct.email, picture: acct.picture || '' });
+    if (!prev?.email) {
+      const guest = load('log', []);
+      if (guest.length) { save(logKey(acct), mergeLogs(load(logKey(acct), []), guest)); save('log', []); }
+      // this browser's own tasks come along too
+      const guestTasks = { tasks: load('tasks', []), ...cleanMeta(load('taskMeta', {})) };
+      if (cleanTasks(guestTasks.tasks).length) {
+        const m = mergeTasks({ tasks: load(taskKey(acct), []), ...cleanMeta(load(taskMetaKey(acct), {})) }, guestTasks);
+        save(taskKey(acct), m.tasks); save(taskMetaKey(acct), { deleted: m.deleted, orderAt: m.orderAt });
+        save('tasks', []); save('taskMeta', {});
+      }
+    }
   }
+  if ((prev?.email || '') !== (acct?.email || '')) taskEvents.dispatchEvent(new Event('reload'));
 }
 
 /** Forget an account's local copy (after it's safely in Drive). */
 export function dropAccountLog(email) {
-  try { localStorage.removeItem(PREFIX + `log:${email}`); } catch { /* ignore */ }
+  try { ['log', 'tasks', 'taskMeta'].forEach((k) => localStorage.removeItem(PREFIX + `${k}:${email}`)); } catch { /* ignore */ }
 }
 
 export function addSession(min, task) {

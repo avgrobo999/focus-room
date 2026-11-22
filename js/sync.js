@@ -1,21 +1,23 @@
 /**
- * Keeps the focus log in the signed-in person's Google Drive, so it follows their
- * Google account to any device rather than staying in one browser.
+ * Keeps the focus log and the task list in the signed-in person's Google Drive, so they
+ * follow their Google account to any device rather than staying in one browser.
  *
- * The log lives in the Drive "app data" folder: a hidden folder only this app can
+ * They live in the Drive "app data" folder: a hidden folder only this app can
  * see, not the person's files (the app asks for the drive.appdata scope only).
  * There's no server of ours: the browser gets a short-lived access token from
  * Google Identity Services and talks to the Drive API itself.
  *
  * Syncing merges rather than overwrites: the account's log is the union of every
- * device's sessions, so two devices can't wipe out each other's time.
+ * device's sessions, so two devices can't wipe out each other's time, and task lists are
+ * merged task by task (see mergeTasks).
  */
-import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261121c';
-import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents } from './store.js?v=20261121c';
+import { GOOGLE_CLIENT_ID, TEST, loadGsi, authConfigured } from './auth.js?v=20261121d';
+import { load, save, getLog, setLog, mergeLogs, logAccount, useAccount, dropAccountLog, logEvents, getTaskState, setTaskState, mergeTasks, taskEvents } from './store.js?v=20261121d';
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 const SCOPES = `${DRIVE_SCOPE} openid email profile`;
 const FILE = 'focus-log.json';
+const TASK_FILE = 'tasks.json'; // a file of its own, so older copies of the app that only know the log leave it alone
 const API = 'https://www.googleapis.com';
 
 export class SyncError extends Error {
@@ -29,14 +31,19 @@ let token = null;
 let tokenExp = 0;
 let tokenEmail = null;
 let fileId = null;
+let taskFileId = null;
 let busy = null;
 
 let rev = 0; // bumps whenever a session is saved
-// per account: when it last synced, and whether this device has sessions Drive hasn't got yet
+let taskRev = 0; // ...and whenever the tasks change
+// per account: when it last synced, and whether this device has sessions or task changes Drive hasn't got yet
 const meta = (email = logAccount()?.email) => (email ? load(`logSync:${email}`, {}) : {});
 const setMeta = (email, m) => save(`logSync:${email}`, { ...meta(email), ...m });
 export const lastSyncAt = () => meta().at || 0;
-export const hasUnsynced = () => !!logAccount() && (!meta().at || !!meta().dirty);
+// tasksDirty: 'edit' for changed tasks, 'time' when only focus time on them has gone up
+// (that alone isn't worth opening Google's pop-up for; it goes up with the next sync)
+export const hasUnsynced = () => !!logAccount() && (!meta().at || !!meta().dirty || meta().tasksDirty === 'edit');
+const anyUnsynced = () => hasUnsynced() || (!!logAccount() && !!meta().tasksDirty);
 export const syncAvailable = () => authConfigured() && typeof fetch === 'function';
 const tokenValid = () => !!token && Date.now() < tokenExp - 60e3;
 
@@ -87,15 +94,15 @@ async function google_(path, opts = {}) {
 const real = {
   token: requestToken,
   async me() { return (await google_('/oauth2/v3/userinfo')).json(); },
-  async find() {
-    const q = encodeURIComponent(`name='${FILE}' and trashed=false`);
+  async find(name) {
+    const q = encodeURIComponent(`name='${name}' and trashed=false`);
     const r = await (await google_(`/drive/v3/files?spaces=appDataFolder&q=${q}&fields=files(id)&pageSize=10`)).json();
     return r.files?.[0]?.id || null;
   },
   async read(id) { return (await google_(`/drive/v3/files/${encodeURIComponent(id)}?alt=media`)).json(); },
-  async create(body) {
+  async create(name, body) {
     const b = `focusroom${Math.random().toString(36).slice(2)}`;
-    const data = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: FILE, parents: ['appDataFolder'] })}\r\n`
+    const data = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: ['appDataFolder'] })}\r\n`
       + `--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}\r\n--${b}--`;
     const r = await google_('/upload/drive/v3/files?uploadType=multipart&fields=id', {
       method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body: data,
@@ -120,10 +127,15 @@ const mock = {
     return { access_token: `mock-${this.user().email}`, expires_in: window.__syncTestTtl ?? 3599 };
   },
   async me() { return { email_verified: true, ...this.user() }; },
-  async find() { return this.db()[tokenEmail] ? `file-${tokenEmail}` : null; },
-  async read() { return this.db()[tokenEmail]; },
-  async create(body) { const d = this.db(); d[tokenEmail] = body; this.put(d); (window.__syncWrites ||= []).push(body.log.length); return `file-${tokenEmail}`; },
-  async update(_id, body) { return this.create(body); },
+  async find(name) { const id = `${tokenEmail}/${name}`; return this.db()[id] ? id : null; },
+  async read(id) { return this.db()[id]; },
+  async create(name, body) {
+    const id = `${tokenEmail}/${name}`;
+    const d = this.db(); d[id] = body; this.put(d);
+    (window.__syncWrites ||= []).push(name === FILE ? body.log.length : `tasks:${body.tasks.length}`);
+    return id;
+  },
+  async update(id, body) { return this.create(id.slice(id.indexOf('/') + 1), body); },
 };
 const drive = TEST ? mock : real;
 
@@ -137,7 +149,7 @@ async function ensureToken(interactive) {
   const me = await drive.me();
   if (!me?.email || me.email_verified === false) throw new SyncError('no-email', 'Couldn’t read your Google account’s email');
   const email = String(me.email).toLowerCase();
-  if (email !== tokenEmail) fileId = null;
+  if (email !== tokenEmail) { fileId = null; taskFileId = null; }
   tokenEmail = email;
   // picked a different account in the Google pop-up: switch to that account's log
   if (email !== acct?.email) useAccount({ email, name: String(me.name || email).slice(0, 60), picture: me.picture || '' });
@@ -157,21 +169,38 @@ export function syncNow({ interactive = false } = {}) {
       if (!logAccount() && !interactive) return false;
       emit('syncing');
       if (!(await ensureToken(interactive))) { emit('idle'); return false; }
-      for (let pass = 0; pass < 2; pass++) {
-        fileId ||= await drive.find();
-        const raw = fileId ? (await drive.read(fileId))?.log : [];
-        const remote = mergeLogs(raw);
-        const startRev = rev;
-        const merged = mergeLogs(remote, getLog()); // nothing awaits between reading and saving the local log
-        setLog(merged);
-        if (JSON.stringify(merged) !== JSON.stringify(raw)) { // new sessions, or junk to clean out
-          const body = { v: 1, updated: Date.now(), log: merged };
-          if (fileId) await drive.update(fileId, body);
-          else fileId = await drive.create(body);
+      let logDone = false, tasksDone = false;
+      for (let pass = 0; pass < 2 && !(logDone && tasksDone); pass++) {
+        if (!logDone) {
+          fileId ||= await drive.find(FILE);
+          const raw = fileId ? (await drive.read(fileId))?.log : [];
+          const remote = mergeLogs(raw);
+          const startRev = rev;
+          const merged = mergeLogs(remote, getLog()); // nothing awaits between reading and saving the local log
+          setLog(merged);
+          if (JSON.stringify(merged) !== JSON.stringify(raw)) { // new sessions, or junk to clean out
+            const body = { v: 1, updated: Date.now(), log: merged };
+            if (fileId) await drive.update(fileId, body);
+            else fileId = await drive.create(FILE, body);
+          }
+          logDone = rev === startRev; // a session finished while we were uploading: go round once more
         }
-        if (rev === startRev) break; // a session finished while we were uploading: go round once more
+        if (!tasksDone) {
+          taskFileId ||= await drive.find(TASK_FILE);
+          const raw = taskFileId ? await drive.read(taskFileId) : null;
+          const remote = mergeTasks(raw, null);
+          const startRev = taskRev;
+          const merged = mergeTasks(remote, getTaskState()); // again nothing awaits between reading and saving
+          setTaskState(merged);
+          if (!raw || JSON.stringify(merged) !== JSON.stringify(remote) || raw.v !== 1) {
+            const body = { v: 1, updated: Date.now(), ...merged };
+            if (taskFileId) await drive.update(taskFileId, body);
+            else taskFileId = await drive.create(TASK_FILE, body);
+          }
+          tasksDone = taskRev === startRev;
+        }
       }
-      setMeta(tokenEmail, { at: Date.now(), dirty: false });
+      setMeta(tokenEmail, { at: Date.now(), ...(logDone ? { dirty: false } : {}), ...(tasksDone ? { tasksDirty: false } : {}) });
       emit('idle');
       return true;
     } catch (e) {
@@ -197,8 +226,8 @@ export async function signInSync() {
 export async function signOutSync() {
   const acct = logAccount();
   if (!acct) return { kept: false };
-  if (hasUnsynced() && tokenValid()) await syncNow();
-  const kept = hasUnsynced(); // never throw away sessions that haven't reached Drive yet
+  if (anyUnsynced() && tokenValid()) await syncNow();
+  const kept = anyUnsynced(); // never throw away sessions or tasks that haven't reached Drive yet
   if (!kept) { dropAccountLog(acct.email); try { localStorage.removeItem(`focusroom:v1:logSync:${acct.email}`); } catch { /* ignore */ } }
   token = null; tokenExp = 0; tokenEmail = null; fileId = null;
   useAccount(null);
@@ -214,6 +243,21 @@ logEvents.addEventListener('added', () => {
   setMeta(acct.email, { dirty: true });
   syncEvents.dispatchEvent(new Event('change'));
   if (tokenValid()) syncNow();
+});
+
+// task edits go up a moment later (so a burst of them is one upload); time ticking up on a
+// task rides along with the next sync
+let taskTimer = 0;
+taskEvents.addEventListener('saved', (e) => {
+  taskRev++;
+  const acct = logAccount();
+  if (!acct) return;
+  const was = meta(acct.email).tasksDirty;
+  const now = e.detail?.edit || was === 'edit' ? 'edit' : 'time';
+  if (now !== was) { setMeta(acct.email, { tasksDirty: now }); syncEvents.dispatchEvent(new Event('change')); }
+  if (!e.detail?.edit || !tokenValid()) return;
+  clearTimeout(taskTimer);
+  taskTimer = setTimeout(async () => { if (busy) await busy; if (tokenValid()) syncNow(); }, 2500);
 });
 
 // signed in already: fetch Google's script now so a later click can open its pop-up straight away
